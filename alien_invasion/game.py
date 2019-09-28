@@ -1,10 +1,10 @@
 import pygame
-from DQN import DQNAgent
+from alien_invasion.DQN import DQNAgent
 import game_functions as gf
 from game_items import GameItems
 from game_stats import GameStats
 from settings import Settings
-from random import randint
+
 
 # FPS = 60
 
