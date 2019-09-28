@@ -294,15 +294,9 @@ def check_aliens_bottom(ai_settings: Settings, stats: GameStats, game_items: Gam
 
     for alien in game_items.aliens:
         if alien.rect.bottom >= alien.screen_rect.bottom:
-            # Behave like ship_hit.
-            collision = pygame.sprite.groupcollide(game_items.aliens, game_items.aliens, True, True)
-            if collision:
-                for aliens_hit_list in collision.values():
-                    stats.score += ai_settings.alien_points * len(aliens_hit_list)
-                    game_items.sb.prep_score()
-                check_high_score(stats, game_items)
-            #ship_hit(ai_settings, stats, game_items)
-            break
+            alien.y = 0
+            # #ship_hit(ai_settings, stats, game_items)
+            # break
 
 
 def check_high_score(stats: GameStats, game_items: GameItems):
