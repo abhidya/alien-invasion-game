@@ -48,6 +48,13 @@ class Alien(Sprite):
         nums = [-1, 0, 1]
         if x is not None:
             print(x, y, game_items)
+        left_edge = self.check_edges("left")
+        right_edge = self.check_edges("right")
+
+        if left_edge:
+            return [1,1]
+        if right_edge:
+            return[0,1]
         return [random.choice(nums),1]
         # return [0, 1]
 
@@ -68,6 +75,7 @@ class Alien(Sprite):
             self.x += self.ai_settings.alien_speed_factor_x * move[0] * tp
             self.rect.x = self.x
             if self.y > self.drop_dist:
+
                 self.drop_dist += self.ai_settings.alien_drop_dist
             # self.y += self.ai_settings.alien_speed_factor_y * self.ai_settings.alien_direction_y * stats.time_passed
             self.y += self.ai_settings.alien_speed_factor_y* move[1] * tp
