@@ -2,6 +2,8 @@ import os.path
 
 import pygame
 from pygame.sprite import Sprite
+import random
+from game_items import GameItems
 
 from game_stats import GameStats
 from settings import Settings
@@ -42,14 +44,36 @@ class Alien(Sprite):
         """Draw the alien at its current position."""
         self.screen.blit(self.image, self.rect)
 
-    def update(self, stats: GameStats):
+    def getmove(self, game_items: GameItems, x=None, y=None, ):
+        nums = [-1, 0, 1]
+        if x is not None:
+            print(x, y, game_items)
+        return [random.choice(nums),1]
+        # return [0, 1]
+
+    def update(self, stats: GameStats,  game_items: GameItems, move=None, move_count=None,  ):
         """Move the alien."""
-        self.x += self.ai_settings.alien_speed_factor_x * self.ai_settings.alien_direction_x * stats.time_passed
-        self.rect.x = self.x
-        if self.y > self.drop_dist:
-            self.drop_dist += self.ai_settings.alien_drop_dist
-        self.y += self.ai_settings.alien_speed_factor_y * self.ai_settings.alien_direction_y * stats.time_passed
-        self.rect.y = self.y
+        if move == None:
+            move = self.getmove(game_items, x=self.x, y=self.y,)#items=game_items)
+
+        tp = 0
+        if hasattr(stats, 'time_passed'):
+            tp = stats.time_passed
+        else:
+            tp = .02
+        if move_count == None:
+            move_count = 2
+        if move_count != 0:
+            # self.x += self.ai_settings.alien_speed_factor_x * self.ai_settings.alien_direction_x * stats.time_passed
+            self.x += self.ai_settings.alien_speed_factor_x * move[0] * tp
+            self.rect.x = self.x
+            if self.y > self.drop_dist:
+                self.drop_dist += self.ai_settings.alien_drop_dist
+            # self.y += self.ai_settings.alien_speed_factor_y * self.ai_settings.alien_direction_y * stats.time_passed
+            self.y += self.ai_settings.alien_speed_factor_y* move[1] * tp
+            # self.y += .1 * move[1] * tp
+            self.rect.y = self.y
+            self.update(GameStats,game_items, move=move, move_count=move_count - 1)
 
     def check_edges(self, edge='both'):
         """Returns True if alien is at edge of screen."""

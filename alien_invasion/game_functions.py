@@ -172,7 +172,7 @@ def check_bullet_alien_collision(ai_settings: Settings, stats: GameStats, game_i
 def update_aliens(ai_settings: Settings, stats: GameStats, game_items: GameItems):
     """Update position for each alien."""
     check_fleet_edges(ai_settings, game_items.aliens)
-    game_items.aliens.update(stats)
+    game_items.aliens.update(stats, game_items)
 
     # Collision between ship and aliens.
     if pygame.sprite.spritecollideany(game_items.ship, game_items.aliens):
@@ -295,7 +295,13 @@ def check_aliens_bottom(ai_settings: Settings, stats: GameStats, game_items: Gam
     for alien in game_items.aliens:
         if alien.rect.bottom >= alien.screen_rect.bottom:
             # Behave like ship_hit.
-            ship_hit(ai_settings, stats, game_items)
+            collision = pygame.sprite.groupcollide(game_items.aliens, game_items.aliens, True, True)
+            if collision:
+                for aliens_hit_list in collision.values():
+                    stats.score += ai_settings.alien_points * len(aliens_hit_list)
+                    game_items.sb.prep_score()
+                check_high_score(stats, game_items)
+            #ship_hit(ai_settings, stats, game_items)
             break
 
 
