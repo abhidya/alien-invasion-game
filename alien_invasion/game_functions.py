@@ -18,6 +18,21 @@ from settings import Settings
 from ship import Ship
 
 
+
+# do_move (Move, stats, items):
+
+# # Move ship to the right.
+#     game_items.ship.moving_right = True
+#     game_items.ship.moving_right = False
+#
+#     # Move ship to the left.
+#     game_items.ship.moving_left = True
+#     game_items.ship.moving_left = False
+#
+#     #Fire Bullet
+#     fire_bullet(ai_settings, game_items)
+
+
 def check_events(ai_settings: Settings, stats: GameStats, game_items: GameItems):
     """Respond to keypresses and mouse events."""
 
