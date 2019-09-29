@@ -17,7 +17,6 @@ from game_stats import GameStats
 from settings import Settings
 from ship import Ship
 
-
 def check_events(ai_settings: Settings, stats: GameStats, game_items: GameItems):
     """Respond to keypresses and mouse events."""
 
@@ -304,3 +303,4 @@ def check_high_score(stats: GameStats, game_items: GameItems):
     if stats.score > stats.high_score:
         stats.high_score = stats.score
         game_items.sb.prep_high_score()
+
