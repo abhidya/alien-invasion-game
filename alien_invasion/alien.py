@@ -70,7 +70,7 @@ class Alien(Sprite):
         else:
             tp = .02
         if move_count == None:
-            move_count = 2
+            move_count = 10
         if move_count != 0:
             # self.x += self.ai_settings.alien_speed_factor_x * self.ai_settings.alien_direction_x * stats.time_passed
             self.x += self.ai_settings.alien_speed_factor_x * move[0] * tp

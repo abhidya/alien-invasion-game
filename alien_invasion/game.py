@@ -1,14 +1,25 @@
-import pygame
-from alien_invasion.DQN import DQNAgent
+from random import randint
+
 import game_functions as gf
+import matplotlib.pyplot as plt
+import numpy as np
+import pygame
+import seaborn as sns
+from DQN import DQNAgent
 from game_items import GameItems
 from game_stats import GameStats
-from settings import Settings
-import numpy as np
 from keras.utils import to_categorical
-from random import randint
-# FPS = 60
+from settings import Settings
 
+from alien_invasion.DQN import DQNAgent
+
+
+# FPS = 60
+def plot_seaborn(array_counter, array_score):
+    sns.set(color_codes=True)
+    ax = sns.regplot(np.array([array_counter])[0], np.array([array_score])[0], color="b", x_jitter=.1, line_kws={'color':'green'})
+    ax.set(xlabel='games', ylabel='score')
+    plt.show()
 
 def run_game():
     FPS = 60
@@ -41,7 +52,7 @@ def run_game():
         gf.start_new_game(ai_settings, stats, game_items)
 
         # Start the main loop for the game.
-        while True:
+        while stats.game_active:
             stats.time_passed = fps_clock.tick(FPS) / 1000  # Time in seconds since previous loop.
 
             gf.check_events(ai_settings, stats, game_items)
@@ -81,14 +92,14 @@ def run_game():
                 # TO:DO record = get_record(game.score, record)
                 # DQN #
 
-            gf.update_screen(ai_settings, stats, game_items)
+            # gf.update_screen(ai_settings, stats, game_items)
 
 
         # FOR THE DQN #
         agent.replay_new(agent.memory)
         counter_games += 1
-        print('Game', counter_games, '      Score:', game.score)
-        score_plot.append(game.score)
+        print('Game', counter_games, '      Score:', stats.score)
+        score_plot.append(stats.score)
         counter_plot.append(counter_games)
     agent.model.save_weights('weights.hdf5')
     plot_seaborn(counter_plot, score_plot)
