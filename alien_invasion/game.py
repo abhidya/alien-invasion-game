@@ -10,7 +10,7 @@ from game_items import GameItems
 from game_stats import GameStats
 from keras.utils import to_categorical
 from settings import Settings
-
+from tqdm import tqdm
 from alien_invasion.DQN import DQNAgent
 
 
@@ -41,7 +41,7 @@ def run_game():
 
     # FOR THE DQN #
 
-    while counter_games < 150:
+    for i in tqdm(range(1, 150)):
 
         # Create statistics.
         stats = GameStats(ai_settings)
@@ -91,20 +91,11 @@ def run_game():
                 agent.train_short_memory(state_old, final_move, reward, state_new, stats.game_active)
 
                 # store the new data into a long term memory
-                # TO:DO  agent.remember(state_old, final_move, reward, state_new, game.crash)
-                # Get value of played game
-                # TO:DO record = get_record(game.score, record)
+                agent.remember(state_old, final_move, reward, state_new,  stats.game_active)
                 # DQN #
 
-            # elif played:
-            #     print("HELLOW")
-            #     user = ask(game_items.screen)
-            #     if len(user) > 0:
-            #         coll = connect_and_collect()
-            #         add_score(user, stats.score, coll)
-            #     played = False
 
-            # gf.update_screen(ai_settings, stats, game_items)
+            gf.update_screen(ai_settings, stats, game_items)
 
         # FOR THE DQN #
         agent.replay_new(agent.memory)

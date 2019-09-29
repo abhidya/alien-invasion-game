@@ -60,6 +60,6 @@ def print_top_scores(collection, num):
 		count = count + 1
 
 #my own tests
-my_col = connect_and_collect()
-add_score("shelb", 50, my_col)
-print_top_scores(my_col, 1)
+# my_col = connect_and_collect()
+# add_score("shelb", 50, my_col)
+# print_top_scores(my_col, 1)
