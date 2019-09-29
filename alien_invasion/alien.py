@@ -3,10 +3,10 @@ import os.path
 import pygame
 from pygame.sprite import Sprite
 import random
-from alien_invasion.game_items import GameItems
+from game_items import GameItems
 
-from alien_invasion.game_stats import GameStats
-from alien_invasion.settings import Settings
+from game_stats import GameStats
+from settings import Settings
 
 
 class Alien(Sprite):
@@ -70,7 +70,7 @@ class Alien(Sprite):
         else:
             tp = .02
         if move_count == None:
-            move_count = 6
+            move_count = 2
         if move_count != 0:
             # self.x += self.ai_settings.alien_speed_factor_x * self.ai_settings.alien_direction_x * stats.time_passed
             self.x += self.ai_settings.alien_speed_factor_x * move[0] * tp

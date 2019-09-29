@@ -21,12 +21,12 @@ class Settings:
         self.bullets_allowed = 5   # bullets allowed in the same time on screen
 
         # Alien settings.
-        self.alien_size = (80, 50)
+        self.alien_size = (80, 40)
         self.alien_drop_dist = 10
         self.alien_ship_dist_factor = 5
 
         # Score card settings.
-        self.score_ship_size = (50, 40)
+        self.score_ship_size = (49, 40)
         self.score_font_size = 35
         self.score_font_color = (255, 255, 255)
 
