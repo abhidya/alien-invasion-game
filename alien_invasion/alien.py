@@ -52,16 +52,16 @@ class Alien(Sprite):
         right_edge = self.check_edges("right")
 
         if left_edge:
-            return [1,1]
+            return [1, 1]
         if right_edge:
-            return[0,1]
-        return [random.choice(nums),1]
+            return [0, 1]
+        return [random.choice(nums), 1]
         # return [0, 1]
 
-    def update(self, stats: GameStats,  game_items: GameItems, move=None, move_count=None,  ):
+    def update(self, stats: GameStats, game_items: GameItems, move=None, move_count=None, ):
         """Move the alien."""
         if move == None:
-            move = self.getmove(game_items, x=self.x, y=self.y,)#items=game_items)
+            move = self.getmove(game_items, x=self.x, y=self.y, )  # items=game_items)
 
         tp = 0
         if hasattr(stats, 'time_passed'):
@@ -75,13 +75,12 @@ class Alien(Sprite):
             self.x += self.ai_settings.alien_speed_factor_x * move[0] * tp
             self.rect.x = self.x
             if self.y > self.drop_dist:
-
                 self.drop_dist += self.ai_settings.alien_drop_dist
             # self.y += self.ai_settings.alien_speed_factor_y * self.ai_settings.alien_direction_y * stats.time_passed
-            self.y += self.ai_settings.alien_speed_factor_y* move[1] * tp
+            self.y += self.ai_settings.alien_speed_factor_y * move[1] * tp
             # self.y += .1 * move[1] * tp
             self.rect.y = self.y
-            self.update(GameStats,game_items, move=move, move_count=move_count - 1)
+            self.update(GameStats, game_items, move=move, move_count=move_count - 1)
 
     def check_edges(self, edge='both'):
         """Returns True if alien is at edge of screen."""

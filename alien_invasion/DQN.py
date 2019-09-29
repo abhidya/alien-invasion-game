@@ -18,48 +18,10 @@ class DQNAgent(object):
         self.agent_predict = 0
         self.learning_rate = 0.0005
         self.model = self.network()
-        #self.model = self.network("weights.hdf5")
+        # self.model = self.network("weights.hdf5")
         self.epsilon = 0
         self.actual = []
         self.memory = []
-
-    def get_state(self, game, player, food):
-
-        state = [
-            # danger straight
-
-            (player.x_change == 0 and player.y_change == -20 and ((list(map(add,player.position[-1],[20, 0])) in player.position) or
-            player.position[ -1][0] + 20 > (game.game_width-20))) or (player.x_change == 0 and player.y_change == 20 and ((list(map(add,player.position[-1],
-            [-20,0])) in player.position) or player.position[-1][0] - 20 < 20)) or (player.x_change == -20 and player.y_change == 0 and ((list(map(
-            add,player.position[-1],[0,-20])) in player.position) or player.position[-1][-1] - 20 < 20)) or (player.x_change == 20 and player.y_change == 0 and (
-            (list(map(add,player.position[-1],[0,20])) in player.position) or player.position[-1][
-             -1] + 20 >= (game.game_height-20))),  # danger right
-
-             (player.x_change == 0 and player.y_change == 20 and ((list(map(add,player.position[-1],[20,0])) in player.position) or
-             player.position[-1][0] + 20 > (game.game_width-20))) or (player.x_change == 0 and player.y_change == -20 and ((list(map(
-             add, player.position[-1],[-20,0])) in player.position) or player.position[-1][0] - 20 < 20)) or (player.x_change == 20 and player.y_change == 0 and (
-            (list(map(add,player.position[-1],[0,-20])) in player.position) or player.position[-1][-1] - 20 < 20)) or (
-            player.x_change == -20 and player.y_change == 0 and ((list(map(add,player.position[-1],[0,20])) in player.position) or
-            player.position[-1][-1] + 20 >= (game.game_height-20))), #danger left
-
-
-            player.x_change == -20,  # move left
-            player.x_change == 20,  # move right
-            player.y_change == -20,  # move up
-            player.y_change == 20,  # move down
-            food.x_food < player.x,  # food left
-            food.x_food > player.x,  # food right
-            food.y_food < player.y,  # food up
-            food.y_food > player.y  # food down
-            ]
-
-        for i in range(len(state)):
-            if state[i]:
-                state[i]=1
-            else:
-                state[i]=0
-
-        return np.asarray(state)
 
     def set_reward(self, player, crash):
         self.reward = 0
