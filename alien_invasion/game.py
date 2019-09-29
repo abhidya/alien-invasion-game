@@ -4,13 +4,12 @@ import game_functions as gf
 from game_items import GameItems
 from game_stats import GameStats
 from settings import Settings
-
+import numpy as np
 
 # FPS = 60
 
 
 def run_game():
-
     FPS = 60
 
     # Initialize game, settings and create a screen object.
@@ -23,7 +22,7 @@ def run_game():
     agent = DQNAgent()
     counter_games = 0
     score_plot = []
-    counter_plot =[]
+    counter_plot = []
     record = 0
 
     # FOR THE DQN #
@@ -43,20 +42,16 @@ def run_game():
         while True:
 
             # FOR THE DQN #
-
             agent.epsilon = 80 - counter_games
-            #state_old = agent.get_state(game, player1, food1)
-
-            #TO:DO  if randint(0, 200) < agent.epsilon:
-            # TO:DO    final_move = to_categorical(randint(0, 2), num_classes=3)
-            #TO:DO            else:
-                # predict action based on the old state
-                # TO:DO   prediction = agent.model.predict(state_old.reshape((1,11)))
-                # TO:DO   final_move = to_categorical(np.argmax(prediction[0]), num_classes=3)
+            state_old = gf.get_state(ai_settings, stats, game_items)
+            if randint(0, 200) < agent.epsilon:
+                final_move = to_categorical(randint(0, 2), num_classes=3)
+            # TO:DO            else:
+            # predict action based on the old state
+            # TO:DO   prediction = agent.model.predict(state_old.reshape((1,11)))
+            # TO:DO   final_move = to_categorical(np.argmax(prediction[0]), num_classes=3)
 
             # FOR THE DQN #
-
-
 
             stats.time_passed = fps_clock.tick(FPS) / 1000  # Time in seconds since previous loop.
 
@@ -66,8 +61,6 @@ def run_game():
                 game_items.ship.update(stats)
                 gf.update_bullets(ai_settings, stats, game_items)
                 gf.update_aliens(ai_settings, stats, game_items)
-
-
 
                 # DQN #
 
@@ -87,15 +80,14 @@ def run_game():
                 # TO:DO record = get_record(game.score, record)
                 # DQN #
 
-
             gf.update_screen(ai_settings, stats, game_items)
 
         # FOR THE DQN #
-        #TO:DO agent.replay_new(agent.memory)
-        #TO:DOcounter_games += 1
-        #TO:DOprint('Game', counter_games, '      Score:', game.score)
-        #TO:DO score_plot.append(game.score)
-        #TO:DO counter_plot.append(counter_games)
+        # TO:DO agent.replay_new(agent.memory)
+        # TO:DOcounter_games += 1
+        # TO:DOprint('Game', counter_games, '      Score:', game.score)
+        # TO:DO score_plot.append(game.score)
+        # TO:DO counter_plot.append(counter_games)
         # FOR THE DQN #
 
 

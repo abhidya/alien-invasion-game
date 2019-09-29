@@ -2,7 +2,7 @@ import os
 import random
 import sys
 import time
-
+import numpy as np
 import pygame
 import pygame.sprite
 
@@ -18,7 +18,6 @@ from settings import Settings
 from ship import Ship
 
 
-
 # do_move (Move, stats, items):
 
 # # Move ship to the right.
@@ -31,6 +30,26 @@ from ship import Ship
 #
 #     #Fire Bullet
 #     fire_bullet(ai_settings, game_items)
+
+
+def get_state(ai_settings: Settings, stats: GameStats, game_items: GameItems):
+    # width = ai_settings.screen_width
+    # height = ai_settings.screen_height
+    width = 52
+    height = 68
+    state = pygame.transform.smoothscale(pygame.PixelArray(pygame.display.get_surface()).make_surface(), (width, height))  # (W, H)
+    formatted_array = np.zeros((height, width), dtype="uint8")
+    for i in range(height):
+        for j in range(width):
+            red, green, blue, alpha = state.get_at((j, i))  # (x, y)
+            formatted_array[i, j] = int((red + green + blue) / 3)
+            if formatted_array[i, j] == 19:
+                formatted_array[i, j] = 0
+            if formatted_array[i, j] != 0:
+                formatted_array[i, j] = 1
+    state = formatted_array
+    return state
+
 
 
 def check_events(ai_settings: Settings, stats: GameStats, game_items: GameItems):
