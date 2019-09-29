@@ -17,19 +17,29 @@ from game_stats import GameStats
 from settings import Settings
 from ship import Ship
 
-# do_move (Move, stats, items):
 
-# # Move ship to the right.
-#     game_items.ship.moving_right = True
-#     game_items.ship.moving_right = False
-#
-#     # Move ship to the left.
-#     game_items.ship.moving_left = True
-#     game_items.ship.moving_left = False
-#
-#     #Fire Bullet
-#     fire_bullet(ai_settings, game_items)
 
+def do_move(move, ai_settings: Settings, stats: GameStats, game_items: GameItems):
+
+    save = move
+    for index, i in enumerate(move):
+        if i == 1:
+            move = index
+    if move == 0: #MOVE RIGHT
+        game_items.ship.moving_left = False
+        game_items.ship.moving_right = True
+        # game_items.ship.moving_left = False
+
+        # print("MOVING RIGHT")
+    if move == 1: #MOVE LEFT
+        # print("MOVING LEFT")
+        game_items.ship.moving_right = False
+
+        game_items.ship.moving_left = True
+    if move == 2:  #Fire Bullet
+        # print("SBOOTING BOOLETS")
+
+        fire_bullet(ai_settings, game_items)
 
 def get_state(ai_settings: Settings, stats: GameStats, game_items: GameItems):
     # width = ai_settings.screen_width
