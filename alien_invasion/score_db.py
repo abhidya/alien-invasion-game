@@ -50,16 +50,18 @@ def add_score(name, score, collection):
 
 #print top scores, pass -1 for all scores or n for the top n scores
 #will have to be updated to communicate what to display
-def print_top_scores(collection, num):
+def get_top_scores(collection, num):
 	count = 1
-	docs = collection.find().sort("score")
+	docs = collection.find().sort("score", -1)
+	jsonObj = ""
 	for doc in docs:
-		print(str(count)+". "+doc["name"]+" "+str(doc["score"]))
+		jsonObj = jsonObj+str(doc)+'\n'
 		if (num != -1 and count == num):
 			break;
 		count = count + 1
+	return jsonObj
 
 #my own tests
-# my_col = connect_and_collect()
+#my_col = connect_and_collect()
 # add_score("shelb", 50, my_col)
-# print_top_scores(my_col, 1)
+#get_top_scores(my_col, 10)
