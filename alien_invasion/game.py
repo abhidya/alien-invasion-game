@@ -94,7 +94,7 @@ def run_game():
                 # DQN #
 
 
-            gf.update_screen(ai_settings, stats, game_items)
+            # gf.update_screen(ai_settings, stats, game_items)
 
         # FOR THE DQN #
         agent.replay_new(agent.memory)

@@ -3,7 +3,7 @@ from typing import Union
 import pygame
 from pygame.sprite import Group
 
-from button import Button
+from alien_invasion.button import Button
 from alien_invasion.game_stats import GameStats
 from alien_invasion.scorecard import Scorecard
 from alien_invasion.settings import Settings
