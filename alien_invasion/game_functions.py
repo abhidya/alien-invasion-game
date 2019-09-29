@@ -9,7 +9,8 @@ import pygame.sprite
 # for annotations
 from pygame.event import EventType
 from pygame.sprite import Group
-
+from score_db import connect_and_collect, add_score
+from end_display import ask
 from alien import Alien
 from bullets import Bullet
 from game_items import GameItems
@@ -328,6 +329,10 @@ def ship_hit(ai_settings: Settings, stats: GameStats, game_items: GameItems):
     else:
         stats.game_active = False
         pygame.mouse.set_visible(True)
+        # user = ask(game_items.screen)
+        # if len(user) > 0:
+        #     coll = connect_and_collect()
+        #     add_score(user, stats.score, coll)
 
 
 def check_aliens_bottom(ai_settings: Settings, stats: GameStats, game_items: GameItems):

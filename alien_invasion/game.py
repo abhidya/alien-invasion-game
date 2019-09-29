@@ -17,9 +17,11 @@ from alien_invasion.DQN import DQNAgent
 # FPS = 60
 def plot_seaborn(array_counter, array_score):
     sns.set(color_codes=True)
-    ax = sns.regplot(np.array([array_counter])[0], np.array([array_score])[0], color="b", x_jitter=.1, line_kws={'color':'green'})
+    ax = sns.regplot(np.array([array_counter])[0], np.array([array_score])[0], color="b", x_jitter=.1,
+                     line_kws={'color': 'green'})
     ax.set(xlabel='games', ylabel='score')
     plt.show()
+
 
 def run_game():
     FPS = 60
@@ -72,13 +74,13 @@ def run_game():
                     # predict action based on the old state
                     prediction = agent.model.predict(state_old.reshape((1, 3536)))
                     final_move = to_categorical(np.argmax(prediction[0]), num_classes=4)
+                    # played = True
 
                 # FOR THE DQN #
 
                 # DQN #
                 # perform new move and get new state
                 gf.do_move(final_move, ai_settings, stats, game_items)
-
 
                 state_new = gf.get_state(ai_settings, stats, game_items)
 
@@ -93,18 +95,16 @@ def run_game():
                 # Get value of played game
                 # TO:DO record = get_record(game.score, record)
                 # DQN #
-                
-                
-                played = True
-            elif played:
-                user = ask(game_items.screen)
-                if len(user) > 0:
-                    coll = connect_and_collect()
-                    add_score(user , stats.score, coll)
-                played = False
+
+            # elif played:
+            #     print("HELLOW")
+            #     user = ask(game_items.screen)
+            #     if len(user) > 0:
+            #         coll = connect_and_collect()
+            #         add_score(user, stats.score, coll)
+            #     played = False
 
             # gf.update_screen(ai_settings, stats, game_items)
-
 
         # FOR THE DQN #
         agent.replay_new(agent.memory)
@@ -114,7 +114,7 @@ def run_game():
         counter_plot.append(counter_games)
     agent.model.save_weights('weights.hdf5')
     plot_seaborn(counter_plot, score_plot)
-        # FOR THE DQN #
+    # FOR THE DQN #
 
 
 if __name__ == '__main__':
