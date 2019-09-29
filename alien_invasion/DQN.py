@@ -23,24 +23,26 @@ class DQNAgent(object):
         self.actual = []
         self.memory = []
 
-    def set_reward(self, player, crash):
+    def set_reward(self, score, ships_left):
         self.reward = 0
-        if crash:
-            self.reward = -10
+        if ships_left  ==  2 :
+            self.reward = -1 * score
             return self.reward
-        if player.eaten:
-            self.reward = 10
+        if ships_left == 1:
+            self.reward = -1.5 * score
+            return self.reward
+        self.reward = score
         return self.reward
 
     def network(self, weights=None):
         model = Sequential()
-        model.add(Dense(output_dim=120, activation='relu', input_dim=11))
+        model.add(Dense(output_dim=120, activation='relu', input_dim=3536))
         model.add(Dropout(0.15))
         model.add(Dense(output_dim=120, activation='relu'))
         model.add(Dropout(0.15))
         model.add(Dense(output_dim=120, activation='relu'))
         model.add(Dropout(0.15))
-        model.add(Dense(output_dim=3, activation='softmax'))
+        model.add(Dense(output_dim=4, activation='softmax'))
         opt = Adam(self.learning_rate)
         model.compile(loss='mse', optimizer=opt)
 
@@ -67,7 +69,9 @@ class DQNAgent(object):
     def train_short_memory(self, state, action, reward, next_state, done):
         target = reward
         if not done:
-            target = reward + self.gamma * np.amax(self.model.predict(next_state.reshape((1, 11)))[0])
-        target_f = self.model.predict(state.reshape((1, 11)))
+            target = reward + self.gamma * np.amax(self.model.predict(next_state.reshape((1, 3536)))[0])
+        target_f = self.model.predict(state.reshape((1, 3536)))
+        check = np.argmax(action)
+        check2 = target_f[0]
         target_f[0][np.argmax(action)] = target
-        self.model.fit(state.reshape((1, 11)), target_f, epochs=1, verbose=0)
+        self.model.fit(state.reshape((1, 3536)), target_f, epochs=1, verbose=0)

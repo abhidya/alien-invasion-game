@@ -47,7 +47,8 @@ class Alien(Sprite):
     def getmove(self, game_items: GameItems, x=None, y=None, ):
         nums = [-1, 0, 1]
         if x is not None:
-            print(x, y, game_items)
+            # print(x, y, game_items)
+            pass
         left_edge = self.check_edges("left")
         right_edge = self.check_edges("right")
 
