@@ -1,0 +1,40 @@
+img {
+	max-width: 100%;
+	height: auto;
+}
+body {
+	background-color: #33334d;
+	color: snow;
+}
+.container {
+	font-family: 'Open Sans', sans-serif;
+	text-align: center;
+	width: 60%;
+	margin: 0 auto;
+}
+table {
+	border-collapse: collapse;
+	width: 600px; 
+}
+th, td {
+	border-bottom: 3px solid gray;
+	font-size: large;
+	padding: 15px;
+	text-align: center;
+}
+th {
+	background-color: #3c9b14;
+
+}
+.bottomtext p a {
+	color: white;
+}
+.bottomtext {
+	color: gray;
+	font-size: small;
+	text-align: center;
+	font-family: 'Open Sans', sans-serif;
+}
+tr:hover {background-color: gray;
+
+
