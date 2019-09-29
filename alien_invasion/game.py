@@ -1,15 +1,14 @@
 from random import randint
 
-import game_functions as gf
+import alien_invasion.game_functions as gf
 import matplotlib.pyplot as plt
 import numpy as np
 import pygame
 import seaborn as sns
-from DQN import DQNAgent
-from game_items import GameItems
-from game_stats import GameStats
+from alien_invasion.game_items import GameItems
+from alien_invasion.game_stats import GameStats
 from keras.utils import to_categorical
-from settings import Settings
+from alien_invasion.settings import Settings
 from tqdm import tqdm
 from alien_invasion.DQN import DQNAgent
 

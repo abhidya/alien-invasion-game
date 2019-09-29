@@ -4,10 +4,10 @@ import pygame
 from pygame.sprite import Group
 
 from button import Button
-from game_stats import GameStats
-from scorecard import Scorecard
-from settings import Settings
-from ship import Ship
+from alien_invasion.game_stats import GameStats
+from alien_invasion.scorecard import Scorecard
+from alien_invasion.settings import Settings
+from alien_invasion.ship import Ship
 
 
 class GameItems:

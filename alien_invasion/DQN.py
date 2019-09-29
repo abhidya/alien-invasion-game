@@ -4,7 +4,6 @@ from keras.layers.core import Dense, Dropout
 import random
 import numpy as np
 import pandas as pd
-from operator import add
 
 
 class DQNAgent(object):

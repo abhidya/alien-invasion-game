@@ -1,9 +1,9 @@
 import pygame
 from pygame.sprite import Sprite
 
-from game_stats import GameStats
-from settings import Settings
-from ship import Ship
+from alien_invasion.game_stats import GameStats
+from alien_invasion.settings import Settings
+from alien_invasion.ship import Ship
 
 
 class Bullet(Sprite):

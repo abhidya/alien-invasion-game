@@ -9,14 +9,14 @@ import pygame.sprite
 # for annotations
 from pygame.event import EventType
 from pygame.sprite import Group
-from score_db import connect_and_collect, add_score
-from end_display import ask
-from alien import Alien
-from bullets import Bullet
-from game_items import GameItems
-from game_stats import GameStats
-from settings import Settings
-from ship import Ship
+from alien_invasion.score_db import connect_and_collect, add_score
+from alien_invasion.end_display import ask
+from alien_invasion.alien import Alien
+from alien_invasion.bullets import Bullet
+from alien_invasion.game_items import GameItems
+from alien_invasion.game_stats import GameStats
+from alien_invasion.settings import Settings
+from alien_invasion.ship import Ship
 
 
 

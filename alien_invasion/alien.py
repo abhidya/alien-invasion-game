@@ -3,10 +3,10 @@ import os.path
 import pygame
 from pygame.sprite import Sprite
 import random
-from game_items import GameItems
+from alien_invasion.game_items import GameItems
 
-from game_stats import GameStats
-from settings import Settings
+from alien_invasion.game_stats import GameStats
+from alien_invasion.settings import Settings
 
 
 class Alien(Sprite):
