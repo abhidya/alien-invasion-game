@@ -55,7 +55,7 @@ class Alien(Sprite):
         if left_edge:
             return [1, 1]
         if right_edge:
-            return [0, 1]
+            return [-1, 1]
         return [random.choice(nums), 1]
         # return [0, 1]
 
@@ -70,7 +70,7 @@ class Alien(Sprite):
         else:
             tp = .02
         if move_count == None:
-            move_count = 2
+            move_count = 6
         if move_count != 0:
             # self.x += self.ai_settings.alien_speed_factor_x * self.ai_settings.alien_direction_x * stats.time_passed
             self.x += self.ai_settings.alien_speed_factor_x * move[0] * tp

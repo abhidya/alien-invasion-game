@@ -25,17 +25,20 @@ class DQNAgent(object):
         self.actual = []
         self.memory = []
 
-    def set_reward(self, score, ships_left):
+    def set_reward(self, score, beforescore, ships_left):
         self.reward = 0
-        if ships_left  ==  2 :
-            self.reward = -1 * score
+        if ships_left  ==  2  and beforescore==score:
+            self.reward = -10
             return self.reward
-        if ships_left == 1:
-            self.reward = -1.5 * score
+        if ships_left == 1 and beforescore==score:
+            self.reward = -20
             return self.reward
-        self.reward = score
+        if beforescore > score:
+            self.reward = score
+        if ships_left == 3 and beforescore==score:
+            self.reward=-2
+            return self.reward
         return self.reward
-
     def network(self, weights=None):
         model = Sequential()
         model.add(Dense(output_dim=120, activation='relu', input_dim=3536))

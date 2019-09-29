@@ -23,7 +23,7 @@ def plot_seaborn(array_counter, array_score):
 
 
 def run_game():
-    FPS = 60
+    FPS = 1000
 
     # Initialize game, settings and create a screen object.
     pygame.init()
@@ -61,9 +61,6 @@ def run_game():
             gf.check_events(ai_settings, stats, game_items)
 
             if stats.game_active:
-                game_items.ship.update(stats)
-                gf.update_bullets(ai_settings, stats, game_items)
-                gf.update_aliens(ai_settings, stats, game_items)
                 # FOR THE DQN #
                 agent.epsilon = 80 - counter_games
                 state_old = gf.get_state(ai_settings, stats, game_items)
@@ -79,12 +76,14 @@ def run_game():
 
                 # DQN #
                 # perform new move and get new state
+                beforeMove = stats.score
                 gf.do_move(final_move, ai_settings, stats, game_items)
-
+                game_items.ship.update(stats)
+                gf.update_bullets(ai_settings, stats, game_items)
+                gf.update_aliens(ai_settings, stats, game_items)
                 state_new = gf.get_state(ai_settings, stats, game_items)
 
-                # set reward for the new state
-                reward = agent.set_reward(stats.score, stats.ships_left)
+                reward = agent.set_reward(stats.score,beforeMove, stats.ships_left)
 
                 # train short memory base on the new action and state
                 agent.train_short_memory(state_old, final_move, reward, state_new, stats.game_active)
@@ -102,7 +101,7 @@ def run_game():
         print('Game', counter_games, '      Score:', stats.score)
         score_plot.append(stats.score)
         counter_plot.append(counter_games)
-    agent.model.save_weights('weights.hdf5')
+        agent.model.save_weights('weights.hdf5')
     plot_seaborn(counter_plot, score_plot)
     # FOR THE DQN #
 
