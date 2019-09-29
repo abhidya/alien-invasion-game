@@ -18,6 +18,7 @@ from settings import Settings
 from ship import Ship
 
 
+
 def do_move(move, ai_settings: Settings, stats: GameStats, game_items: GameItems):
 
     save = move
@@ -57,8 +58,6 @@ def get_state(ai_settings: Settings, stats: GameStats, game_items: GameItems):
                 formatted_array[i, j] = 1
     state = formatted_array
     return state
-
-
 
 def check_events(ai_settings: Settings, stats: GameStats, game_items: GameItems):
     """Respond to keypresses and mouse events."""
@@ -346,3 +345,4 @@ def check_high_score(stats: GameStats, game_items: GameItems):
     if stats.score > stats.high_score:
         stats.high_score = stats.score
         game_items.sb.prep_high_score()
+

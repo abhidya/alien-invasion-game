@@ -49,6 +49,8 @@ def run_game():
 
         # Create a fleet of aliens.
         gf.create_fleet(ai_settings, game_items)
+        played = False
+
         gf.start_new_game(ai_settings, stats, game_items)
 
         # Start the main loop for the game.
@@ -91,6 +93,15 @@ def run_game():
                 # Get value of played game
                 # TO:DO record = get_record(game.score, record)
                 # DQN #
+                
+                
+                played = True
+            elif played:
+                user = ask(game_items.screen)
+                if len(user) > 0:
+                    coll = connect_and_collect()
+                    add_score(user , stats.score, coll)
+                played = False
 
             # gf.update_screen(ai_settings, stats, game_items)
 
