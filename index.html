@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="GalagAI static browser demo for the alien-invasion-game Python/Pygame project.">
+  <title>GalagAI | Static Browser Demo</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">Static playable demo</p>
+        <h1 id="page-title">GalagAI</h1>
+        <p>
+          A browser-safe remake of the repo's Pygame alien invasion loop. Play it here,
+          switch on the heuristic pilot, then inspect the Python source and legacy DQN assets.
+        </p>
+      </div>
+      <div class="hero-actions" aria-label="Project links">
+        <a href="https://github.com/abhidya/alien-invasion-game" target="_blank" rel="noopener">Source</a>
+        <a href="alien_invasion/DQN.py" target="_blank" rel="noopener">DQN code</a>
+      </div>
+    </section>
+
+    <section class="game-card" aria-labelledby="demo-title">
+      <div class="game-header">
+        <div>
+          <p class="eyebrow">Canvas arcade</p>
+          <h2 id="demo-title">Play the demo</h2>
+        </div>
+        <dl class="score-strip" aria-label="Game stats">
+          <div><dt>Score</dt><dd id="score">0</dd></div>
+          <div><dt>Wave</dt><dd id="wave">1</dd></div>
+          <div><dt>Lives</dt><dd id="lives">3</dd></div>
+          <div><dt>Best</dt><dd id="best">0</dd></div>
+        </dl>
+      </div>
+
+      <canvas id="game" width="960" height="560" aria-label="Playable GalagAI arcade canvas"></canvas>
+
+      <div class="controls">
+        <button id="start-button" type="button">Start</button>
+        <button id="ai-button" type="button" aria-pressed="false">Pilot: manual</button>
+        <button id="reset-button" type="button">Reset</button>
+      </div>
+      <p class="hint">
+        Keyboard: Arrow keys or A/D move, Space fires, P toggles the trained pilot.
+        Touch: drag across the game area and tap to fire.
+      </p>
+    </section>
+
+    <section class="notes-grid" aria-label="Project status">
+      <article>
+        <h2>What works now</h2>
+        <p>
+          The GitHub Pages surface is a dependency-free static demo. It loads the checked-in
+          ship and alien sprites, runs locally from a static server, and stores the best score
+          in the browser.
+        </p>
+      </article>
+      <article>
+        <h2>AI status</h2>
+        <p>
+          The browser pilot is a trained linear softmax model for this static demo, with a
+          deterministic heuristic fallback if the model artifact cannot load. The legacy Keras
+          DQN code and `weights.hdf5` are preserved for inspection, but retraining that path
+          requires a Python ML environment with Pygame, TensorFlow/Keras, pandas, and HDF5 tooling.
+        </p>
+      </article>
+      <article>
+        <h2>Python path</h2>
+        <p>
+          The original Pygame implementation remains in `alien_invasion/`. Use it for desktop
+          play and model experiments; use this static page for portfolio-safe browser review.
+        </p>
+      </article>
+    </section>
+  </main>
+
+  <script src="js/galagai.js"></script>
+</body>
+</html>
