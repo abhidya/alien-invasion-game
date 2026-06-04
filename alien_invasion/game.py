@@ -1,3 +1,5 @@
+import argparse
+from pathlib import Path
 from random import randint
 
 import alien_invasion.game_functions as gf
@@ -7,7 +9,7 @@ import pygame
 import seaborn as sns
 from alien_invasion.game_items import GameItems
 from alien_invasion.game_stats import GameStats
-from keras.utils import to_categorical
+from tensorflow.keras.utils import to_categorical
 from alien_invasion.settings import Settings
 from tqdm import tqdm
 from alien_invasion.DQN import DQNAgent
@@ -22,8 +24,8 @@ def plot_seaborn(array_counter, array_score):
     plt.show()
 
 
-def run_game():
-    FPS = 1000
+def run_game(episodes=150, fps=1000, weights_path=None, show_plot=True):
+    weights_path = Path(weights_path or Path(__file__).with_name("weights.weights.h5"))
 
     # Initialize game, settings and create a screen object.
     pygame.init()
@@ -32,15 +34,14 @@ def run_game():
 
     # FOR THE DQN #
 
-    agent = DQNAgent()
+    agent = DQNAgent(weights_path=weights_path)
     counter_games = 0
     score_plot = []
     counter_plot = []
-    record = 0
 
     # FOR THE DQN #
 
-    for i in tqdm(range(1, 150)):
+    for _ in tqdm(range(1, episodes + 1)):
 
         # Create statistics.
         stats = GameStats(ai_settings)
@@ -56,7 +57,7 @@ def run_game():
 
         # Start the main loop for the game.
         while stats.game_active:
-            stats.time_passed = fps_clock.tick(FPS) / 1000  # Time in seconds since previous loop.
+            stats.time_passed = fps_clock.tick(fps) / 1000  # Time in seconds since previous loop.
 
             gf.check_events(ai_settings, stats, game_items)
 
@@ -101,10 +102,18 @@ def run_game():
         print('Game', counter_games, '      Score:', stats.score)
         score_plot.append(stats.score)
         counter_plot.append(counter_games)
-        agent.model.save_weights('weights.hdf5')
-    plot_seaborn(counter_plot, score_plot)
+        weights_path.parent.mkdir(parents=True, exist_ok=True)
+        agent.model.save_weights(str(weights_path))
+    if show_plot:
+        plot_seaborn(counter_plot, score_plot)
     # FOR THE DQN #
 
 
 if __name__ == '__main__':
-    run_game()
+    parser = argparse.ArgumentParser(description="Train the legacy Pygame DQN agent.")
+    parser.add_argument("--episodes", type=int, default=150)
+    parser.add_argument("--fps", type=int, default=1000)
+    parser.add_argument("--weights", default=str(Path(__file__).with_name("weights.weights.h5")))
+    parser.add_argument("--no-plot", action="store_true", help="Skip the seaborn/matplotlib score plot.")
+    args = parser.parse_args()
+    run_game(episodes=args.episodes, fps=args.fps, weights_path=args.weights, show_plot=not args.no_plot)

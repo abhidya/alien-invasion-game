@@ -1,67 +1,41 @@
-import pymongo
-import socket
 import hashlib
+import os
+import socket
 
-#connect to mongo, find the db, and find the correct collection
-#update to connect to non local host
+import pymongo
+
+
 def connect_and_collect():
-	client = pymongo.MongoClient("mongodb://35.188.132.96:27017")
+    """Connect to the configured MongoDB high-score collection."""
 
-	if "highscore_db" in client.list_database_names():
-		db = client["highscore_db"]
-	else:
-		print("Unable to locate database")
-		quit()
+    uri = os.environ.get("GALAGAI_MONGO_URI", "mongodb://127.0.0.1:27017")
+    db_name = os.environ.get("GALAGAI_MONGO_DB", "highscore_db")
+    collection_name = os.environ.get("GALAGAI_MONGO_COLLECTION", "scores")
+    client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=2500)
+    client.admin.command("ping")
+    return client[db_name][collection_name]
 
-	if "scores" in db.list_collection_names():
-		collection = db["scores"]
-	else:
-		print("Unable to locate collection")
-		quit()
 
-	print("Successfully connecting to db and grabbed collection")
-	
-	return collection
-
-#given a name, figure out ip/name hash and update scores collection
-#might have to pass the ip string in the future
 def add_score(name, score, collection):
-	hostname = socket.gethostname()
-	IPAddr = socket.gethostbyname(hostname)
-	
-	hash = IPAddr+name
-	hash = hashlib.md5(hash.encode()).hexdigest()
-	
-	query = { "key":hash }
+    """Add or update one high score keyed by host/name."""
 
-	if collection.find(query).count() > 0:
-		old_score = collection.find_one(query,{"_id":0, "score":1})["score"]
-		if old_score > score:
-			print("User already has a highscore")
-		else:
-			collection.delete_one(query)
-			dict = { "key":hash, "name":name, "score":score }
-			collection.insert_one(dict)
-			print("Updated user's score")
-	else:
-		dict = { "key":hash, "name":name, "score":score }
-		collection.insert_one(dict)
-		print("Added new user with highscore")
+    hostname = socket.gethostname()
+    ip_addr = socket.gethostbyname(hostname)
+    score_key = hashlib.md5(f"{ip_addr}{name}".encode()).hexdigest()
+    query = {"key": score_key}
+    existing = collection.find_one(query, {"_id": 0, "score": 1})
+    if existing and existing["score"] > score:
+        print("User already has a higher score")
+        return
+    collection.replace_one(query, {"key": score_key, "name": name, "score": score}, upsert=True)
+    print("Saved user's score")
 
-#print top scores, pass -1 for all scores or n for the top n scores
-#will have to be updated to communicate what to display
+
 def get_top_scores(collection, num):
-	count = 1
-	docs = collection.find().sort("score", -1)
-	jsonObj = ""
-	for doc in docs:
-		jsonObj = jsonObj+str(doc)+'\n'
-		if (num != -1 and count == num):
-			break;
-		count = count + 1
-	return jsonObj
+    """Return top scores as JSON-serializable dictionaries."""
 
-#my own tests
-#my_col = connect_and_collect()
-# add_score("shelb", 50, my_col)
-#get_top_scores(my_col, 10)
+    limit = 0 if num == -1 else num
+    docs = collection.find({}, {"_id": 0, "name": 1, "score": 1}).sort("score", -1)
+    if limit:
+        docs = docs.limit(limit)
+    return list(docs)

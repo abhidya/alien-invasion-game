@@ -1,0 +1,8 @@
+-r requirements.txt
+h5py>=3.10,<4
+matplotlib>=3.8,<4
+numpy>=1.26,<2
+pandas>=2.2,<3
+seaborn>=0.13,<1
+tensorflow>=2.16,<2.18
+tqdm>=4.66,<5

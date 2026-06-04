@@ -1,14 +1,27 @@
-from keras.optimizers import Adam
-from keras.models import Sequential
-from keras.layers.core import Dense, Dropout
+from pathlib import Path
 import random
+
 import numpy as np
 import pandas as pd
+
+try:
+    from tensorflow.keras.layers import Dense, Dropout
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.optimizers import Adam
+except ImportError as error:  # pragma: no cover - depends on optional ML stack.
+    raise ImportError(
+        "DQNAgent requires TensorFlow/Keras. Install the ML environment with "
+        "`python3.12 -m pip install -r requirements-ml.txt`."
+    ) from error
+
+
+DEFAULT_WEIGHTS = Path(__file__).with_name("weights.weights.h5")
+LEGACY_WEIGHTS = Path(__file__).with_name("weights.hdf5")
 
 
 class DQNAgent(object):
 
-    def __init__(self):
+    def __init__(self, weights_path=DEFAULT_WEIGHTS):
         self.reward = 0
         self.gamma = 0.9
         self.dataframe = pd.DataFrame()
@@ -17,42 +30,47 @@ class DQNAgent(object):
         self.agent_predict = 0
         self.learning_rate = 0.0005
         self.model = self.network()
-        try:
-            self.model = self.network("weights.hdf5")
-        except:
-            pass
+        self.weights_path = Path(weights_path)
+        if self.weights_path.exists():
+            self.model.load_weights(str(self.weights_path))
+        elif LEGACY_WEIGHTS.exists():
+            print(
+                f"Legacy weights found at {LEGACY_WEIGHTS}; pass "
+                f"`--weights {LEGACY_WEIGHTS}` if you need to inspect/load them."
+            )
         self.epsilon = 0
         self.actual = []
         self.memory = []
 
     def set_reward(self, score, beforescore, ships_left):
         self.reward = 0
-        if ships_left  ==  2  and beforescore==score:
+        if ships_left == 2 and beforescore == score:
             self.reward = -10
             return self.reward
-        if ships_left == 1 and beforescore==score:
+        if ships_left == 1 and beforescore == score:
             self.reward = -20
             return self.reward
         if beforescore > score:
             self.reward = score
-        if ships_left == 3 and beforescore==score:
-            self.reward=-2
+        if ships_left == 3 and beforescore == score:
+            self.reward = -2
             return self.reward
         return self.reward
+
     def network(self, weights=None):
         model = Sequential()
-        model.add(Dense(output_dim=120, activation='relu', input_dim=3536))
+        model.add(Dense(120, activation='relu', input_shape=(3536,)))
         model.add(Dropout(0.15))
-        model.add(Dense(output_dim=120, activation='relu'))
+        model.add(Dense(120, activation='relu'))
         model.add(Dropout(0.15))
-        model.add(Dense(output_dim=120, activation='relu'))
+        model.add(Dense(120, activation='relu'))
         model.add(Dropout(0.15))
-        model.add(Dense(output_dim=4, activation='softmax'))
-        opt = Adam(self.learning_rate)
+        model.add(Dense(4, activation='softmax'))
+        opt = Adam(learning_rate=self.learning_rate)
         model.compile(loss='mse', optimizer=opt)
 
         if weights:
-            model.load_weights(weights)
+            model.load_weights(str(weights))
         return model
 
     def remember(self, state, action, reward, next_state, done):
