@@ -1,7 +1,7 @@
 # alien-invasion-game
 [![Open Source Helpers](https://www.codetriage.com/goswami-rahul/alien-invasion-game/badges/users.svg)](https://www.codetriage.com/goswami-rahul/alien-invasion-game)
 
-A basic game similiar to Galaga written in Python3 using Pygame. 
+A basic game similar to Galaga written in Python3 using Pygame.
 This project uses completely Object-oriented approach and the code is well documented.
 I will continue to add new features to this game. Suggestions are welcomed !! :)
 
@@ -16,16 +16,46 @@ git clone https://github.com/username/alien-invasion-game.git
 To run the game, ensure that you have python3 and pygame library installed in 
 your system.
 
-### To install pygame do :
+## Quick Local Play
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install pygame
+cd alien_invasion
+python game.py
+```
+
+The game opens a Pygame window, so run it on a machine with a desktop display available.
+
+### To install pygame do:
 ```
 sudo python3 -m pip install pygame --user
 ```
 
-### then run the game using :  
+### then run the game using:
 ```
 cd path/to/folder/alien-invasion-game/alien_invasion                                           
 python3 game.py
 ```
+
+## Browser Scoreboard Demo
+
+`server.py` exposes a small Flask page and `/get_scores` endpoint for score display experiments:
+
+```bash
+python -m pip install flask pymongo
+python server.py
+# then open http://127.0.0.1:3000/
+```
+
+This path expects MongoDB configuration from `alien_invasion/score_db.py`; it is separate from the core Pygame play loop.
+
+## Demo Limitations
+
+- Pygame play requires a graphical desktop session and keyboard input.
+- The included `weights.hdf5`/DQN files are experimental assets, not required for the basic manual game.
+- The Flask scoreboard is optional and needs MongoDB connectivity before `/get_scores` can return real data.
 ## Contributions:
 Any ideas to add new feature or enhance the current one are appreciated.
 First fork the repo. Then you can [add pull requests][pr] or [open issues][issue] anytime you want.
