@@ -20,8 +20,8 @@ python3 -m http.server 4173
 open http://127.0.0.1:4173/
 ```
 
-The repo also includes `.github/workflows/pages.yml` to deploy the static root
-site to GitHub Pages from `master`.
+The static root can be published to GitHub Pages from the `gh-pages` branch or
+served by any static host.
 
 Controls:
 
