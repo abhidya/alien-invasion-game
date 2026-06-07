@@ -241,7 +241,8 @@
         y: canvas.height - 72,
         width: 64,
         height: 48,
-        speed: 470
+        speed: 470,
+        verticalSpeed: 330
       },
       bullets: [],
       enemyShots: [],
@@ -430,6 +431,8 @@
     var action = predictModelAction(pilotModel, "stay");
     keys.ArrowLeft = action === "left";
     keys.ArrowRight = action === "right";
+    keys.ArrowUp = action === "up";
+    keys.ArrowDown = action === "down";
     if (action === "fire") fire();
   }
 
@@ -579,9 +582,15 @@
     var liveAliens = state.aliens.filter(function (alien) { return alien.alive; });
     var target = nearestThreat();
     var targetDx = 0;
+    var targetDy = 0;
     var alienCount = 0;
     if (target) {
       targetDx = clamp(((target.x + target.width / 2) - shipCenter) / (canvas.width / 2), -1, 1);
+      targetDy = clamp(
+        ((target.y + target.height / 2) - (state.ship.y + state.ship.height / 2)) / canvas.height,
+        -1,
+        1
+      );
       alienCount = liveAliens.length / 45;
     }
 
@@ -637,7 +646,9 @@
       pilotBulletY,
       clamp(beeCount, 0, 1),
       clamp(gunshipCount, 0, 1),
-      clamp(bossCount, 0, 1)
+      clamp(bossCount, 0, 1),
+      clamp(state.ship.y / canvas.height, 0, 1),
+      targetDy
     ];
   }
 
@@ -695,8 +706,11 @@
 
   function updateShip(dt) {
     var direction = 0;
+    var verticalDirection = 0;
     if (keys.ArrowLeft || keys.KeyA) direction -= 1;
     if (keys.ArrowRight || keys.KeyD) direction += 1;
+    if (keys.ArrowUp || keys.KeyW) verticalDirection -= 1;
+    if (keys.ArrowDown || keys.KeyS) verticalDirection += 1;
     if (pointerX !== null) {
       var desired = pointerX - state.ship.width / 2;
       state.ship.x += (desired - state.ship.x) * Math.min(1, dt * 12);
@@ -704,6 +718,8 @@
       state.ship.x += direction * state.ship.speed * dt;
     }
     state.ship.x = clamp(state.ship.x, 18, canvas.width - state.ship.width - 18);
+    state.ship.y += verticalDirection * state.ship.verticalSpeed * dt;
+    state.ship.y = clamp(state.ship.y, canvas.height - 170, canvas.height - 56);
     if (keys.Space) fire();
   }
 
@@ -718,27 +734,24 @@
     var liveAliens = state.aliens.filter(function (alien) { return alien.alive; });
     if (!liveAliens.length) return;
     var formationAliens = liveAliens.filter(function (alien) { return !alien.free; });
-    var hitEdge = formationAliens.some(function (alien) {
-      var nextX = alien.x + state.fleetDirection * state.fleetSpeed * dt;
-      return nextX < 16 || nextX + alien.width > canvas.width - 16;
-    });
-    if (hitEdge) {
-      state.fleetDirection *= -1;
-      formationAliens.forEach(function (alien) { alien.y += state.fleetDrop; });
-    }
     liveAliens.forEach(function (alien) {
       alien.wobble += dt * 5;
       if (alien.free) {
         updateFreeAlien(alien, dt);
       } else {
         alien.x += state.fleetDirection * state.fleetSpeed * dt;
+        wrapAlienHorizontal(alien);
         if (alien.loop) {
           alien.x += Math.cos(alien.wobble * 2.1) * 85 * dt;
           alien.y += Math.sin(alien.wobble * 2.1) * 45 * dt;
+          wrapAlienHorizontal(alien);
         }
       }
-      if (alien.y + alien.height >= state.ship.y) {
+      if (alien.alive && intersects(alien, state.ship)) {
+        alien.alive = false;
         loseLife();
+      } else if (alien.y + alien.height >= canvas.height) {
+        alien.alive = false;
       }
     });
   }
@@ -752,12 +765,19 @@
       alien.x += clamp(shipCenter - (alien.x + alien.width / 2), -1, 1) * (180 + state.wave * 16) * dt;
       alien.y += (130 + state.wave * 14) * dt;
     }
-    if (alien.y > canvas.height - 130 || alien.x < 12 || alien.x + alien.width > canvas.width - 12) {
+    wrapAlienHorizontal(alien);
+    if (alien.y > canvas.height - 130) {
       alien.free = false;
       alien.scatter = 0;
       alien.loop = false;
-      alien.x = clamp(alien.homeX + Math.sin(alien.wobble) * 20, 18, canvas.width - alien.width - 18);
-      alien.y = Math.min(alien.homeY + state.wave * 8, state.ship.y - 120);
+    }
+  }
+
+  function wrapAlienHorizontal(alien) {
+    if (alien.x + alien.width < 0) {
+      alien.x = canvas.width;
+    } else if (alien.x > canvas.width) {
+      alien.x = -alien.width;
     }
   }
 
@@ -810,6 +830,7 @@
     shake = 0.45;
     state.enemyShots = [];
     state.ship.x = canvas.width / 2 - state.ship.width / 2;
+    state.ship.y = canvas.height - 72;
     if (state.lives <= 0) {
       endGame("Game over");
     } else {
