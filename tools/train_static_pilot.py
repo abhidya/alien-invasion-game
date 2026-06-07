@@ -26,6 +26,7 @@ import torch.nn as nn
 from gymnasium import spaces
 from stable_baselines3 import DQN
 from stable_baselines3.common.monitor import Monitor
+from tqdm.auto import tqdm
 
 
 PILOT_ACTIONS = ["left", "right", "fire", "stay"]
@@ -60,7 +61,9 @@ ACTION_DT = 0.12
 DROP_COOLDOWN_SECONDS = 1.08
 ENEMY_SHOT_COOLDOWN_SECONDS = 0.42
 INVALID_DROP_PENALTY = 0.90
-MODEL_SCHEMA_VERSION = 5
+MODEL_SCHEMA_VERSION = 6
+DQN_NET_ARCH = [64, 64]
+MODEL_FILE_DIR = "galagai-models"
 
 
 @dataclass
@@ -589,10 +592,52 @@ def make_dqn(env: gym.Env, seed: int, learning_rate: float) -> DQN:
         exploration_fraction=0.35,
         exploration_initial_eps=1.0,
         exploration_final_eps=0.05,
-        policy_kwargs={"net_arch": [128, 128]},
+        policy_kwargs={"net_arch": DQN_NET_ARCH},
         seed=seed,
         verbose=0,
     )
+
+
+class TrainingProgress:
+    def __init__(self, enabled: bool, total: int):
+        self.bar = tqdm(
+            total=total,
+            desc="self-play generations",
+            unit="gen",
+            dynamic_ncols=True,
+            disable=not enabled,
+        )
+
+    def update(self, metrics: dict[str, object], pilot_count: int, enemy_count: int) -> None:
+        if self.bar.disable:
+            return
+        self.bar.set_postfix(
+            side=metrics["trained"],
+            pilot=pilot_count,
+            enemies=enemy_count,
+            p_win=f"{float(metrics['pilotWinRate']):.2f}",
+            e_win=f"{float(metrics['enemyWinRate']):.2f}",
+            drop=f"{float(metrics['enemyDropRate']):.3f}",
+            invalid=f"{float(metrics['invalidDropRate']):.3f}",
+            reached=str(bool(metrics["dominanceReached"])).lower(),
+            refresh=False,
+        )
+        self.bar.update(1)
+
+    def write(self, message: str) -> None:
+        if not self.bar.disable:
+            self.bar.write(message)
+
+    def close(self) -> None:
+        self.bar.close()
+
+
+def progress_total(cycles: int, max_phase_iterations: int, generations_per_side: int | None, rounds: int | None) -> int:
+    if generations_per_side is not None:
+        return generations_per_side * 2
+    if rounds is not None:
+        return rounds
+    return cycles * 2 * max_phase_iterations
 
 
 def train_self_play(
@@ -604,12 +649,16 @@ def train_self_play(
     max_steps: int,
     dominance_threshold: float = 0.6,
     max_phase_iterations: int = 3,
+    generations_per_side: int | None = None,
     rounds: int | None = None,
     timesteps_per_round: int | None = None,
+    progress: bool = False,
 ) -> tuple[DQN, DQN, dict[str, object]]:
     if timesteps_per_round is not None:
         phase_timesteps = timesteps_per_round
-    if rounds is not None:
+    if generations_per_side is not None:
+        phase_roles = []
+    elif rounds is not None:
         phase_roles = ["pilot" if phase % 2 == 1 else "enemies" for phase in range(1, rounds + 1)]
         max_phase_iterations = 1
     else:
@@ -620,72 +669,102 @@ def train_self_play(
     history: list[dict[str, object]] = []
     checkpoints: dict[str, list[dict[str, object]]] = {"pilot": [], "enemies": []}
     round_number = 0
+    progress_tracker = TrainingProgress(
+        progress,
+        progress_total(cycles, max_phase_iterations, generations_per_side, rounds),
+    )
 
-    for phase_number, role in enumerate(phase_roles, start=1):
-        for phase_iteration in range(1, max_phase_iterations + 1):
-            round_number += 1
-            phase_seed = seed + phase_number * 1000 + phase_iteration * 97
-            if role == "pilot":
-                enemy_policy: Policy = SB3Policy(enemy_model) if enemy_model is not None else OpeningEnemyPolicy()
-                env = PilotTrainingEnv(enemy_policy, seed=phase_seed, max_steps=max_steps)
-                if pilot_model is None:
-                    pilot_model = make_dqn(env, seed=seed, learning_rate=8e-4)
-                else:
-                    pilot_model.set_env(Monitor(env))
-                pilot_model.learn(total_timesteps=phase_timesteps, reset_num_timesteps=False, progress_bar=False)
-                trained = "pilot"
+    def run_generation(role: str, phase_number: int, phase_iteration: int) -> bool:
+        nonlocal pilot_model, enemy_model, round_number
+
+        round_number += 1
+        phase_seed = seed + phase_number * 1000 + phase_iteration * 97
+        if role == "pilot":
+            enemy_policy: Policy = SB3Policy(enemy_model) if enemy_model is not None else OpeningEnemyPolicy()
+            env = PilotTrainingEnv(enemy_policy, seed=phase_seed, max_steps=max_steps)
+            if pilot_model is None:
+                pilot_model = make_dqn(env, seed=seed, learning_rate=8e-4)
             else:
-                pilot_policy: Policy = SB3Policy(pilot_model) if pilot_model is not None else HeuristicPilotPolicy()
-                env = EnemyTrainingEnv(pilot_policy, seed=phase_seed, max_steps=max_steps)
-                if enemy_model is None:
-                    enemy_model = make_dqn(env, seed=seed + 1, learning_rate=8e-4)
-                else:
-                    enemy_model.set_env(Monitor(env))
-                enemy_model.learn(total_timesteps=phase_timesteps, reset_num_timesteps=False, progress_bar=False)
-                trained = "enemies"
+                pilot_model.set_env(Monitor(env))
+            pilot_model.learn(total_timesteps=phase_timesteps, reset_num_timesteps=False, progress_bar=False)
+            trained = "pilot"
+        else:
+            pilot_policy: Policy = SB3Policy(pilot_model) if pilot_model is not None else HeuristicPilotPolicy()
+            env = EnemyTrainingEnv(pilot_policy, seed=phase_seed, max_steps=max_steps)
+            if enemy_model is None:
+                enemy_model = make_dqn(env, seed=seed + 1, learning_rate=8e-4)
+            else:
+                enemy_model.set_env(Monitor(env))
+            enemy_model.learn(total_timesteps=phase_timesteps, reset_num_timesteps=False, progress_bar=False)
+            trained = "enemies"
 
-            metrics = evaluate_current_matchup(
-                seed=seed + round_number * 3000,
-                pilot_model=pilot_model,
-                enemy_model=enemy_model,
-                eval_episodes=eval_episodes,
-                max_steps=max_steps,
+        metrics = evaluate_current_matchup(
+            seed=seed + round_number * 3000,
+            pilot_model=pilot_model,
+            enemy_model=enemy_model,
+            eval_episodes=eval_episodes,
+            max_steps=max_steps,
+        )
+        dominance_metric = "pilotWinRate" if trained == "pilot" else "enemyWinRate"
+        dominance_reached = float(metrics[dominance_metric]) >= dominance_threshold
+        round_metrics = {
+            "round": round_number,
+            "phase": phase_number,
+            "phaseIteration": phase_iteration,
+            "trained": trained,
+            "generation": len(checkpoints[trained]) + 1,
+            "dominanceMetric": dominance_metric,
+            "dominanceThreshold": dominance_threshold,
+            "dominanceReached": dominance_reached,
+            **metrics,
+        }
+        history.append(round_metrics)
+
+        if trained == "pilot" and pilot_model is not None:
+            checkpoints["pilot"].append(
+                checkpoint_entry(
+                    role="pilot",
+                    model=pilot_model,
+                    version_id=len(checkpoints["pilot"]) + 1,
+                    metrics=round_metrics,
+                )
             )
-            dominance_metric = "pilotWinRate" if trained == "pilot" else "enemyWinRate"
-            dominance_reached = float(metrics[dominance_metric]) >= dominance_threshold
-            round_metrics = {
-                "round": round_number,
-                "phase": phase_number,
-                "phaseIteration": phase_iteration,
-                "trained": trained,
-                "dominanceMetric": dominance_metric,
-                "dominanceThreshold": dominance_threshold,
-                "dominanceReached": dominance_reached,
-                **metrics,
-            }
-            history.append(round_metrics)
-
-            if trained == "pilot" and pilot_model is not None:
-                checkpoints["pilot"].append(
-                    checkpoint_entry(
-                        role="pilot",
-                        model=pilot_model,
-                        version_id=len(checkpoints["pilot"]) + 1,
-                        metrics=round_metrics,
-                    )
+        elif trained == "enemies" and enemy_model is not None:
+            checkpoints["enemies"].append(
+                checkpoint_entry(
+                    role="enemies",
+                    model=enemy_model,
+                    version_id=len(checkpoints["enemies"]) + 1,
+                    metrics=round_metrics,
                 )
-            elif trained == "enemies" and enemy_model is not None:
-                checkpoints["enemies"].append(
-                    checkpoint_entry(
-                        role="enemies",
-                        model=enemy_model,
-                        version_id=len(checkpoints["enemies"]) + 1,
-                        metrics=round_metrics,
-                    )
-                )
+            )
+        progress_tracker.update(round_metrics, len(checkpoints["pilot"]), len(checkpoints["enemies"]))
+        return dominance_reached
 
-            if dominance_reached:
-                break
+    try:
+        if generations_per_side is not None:
+            phase_number = 0
+            role = "pilot"
+            while len(checkpoints["pilot"]) < generations_per_side or len(checkpoints["enemies"]) < generations_per_side:
+                if len(checkpoints[role]) >= generations_per_side:
+                    role = "enemies" if role == "pilot" else "pilot"
+                    continue
+                phase_number += 1
+                for phase_iteration in range(1, max_phase_iterations + 1):
+                    if len(checkpoints[role]) >= generations_per_side:
+                        break
+                    dominance_reached = run_generation(role, phase_number, phase_iteration)
+                    if dominance_reached:
+                        break
+                role = "enemies" if role == "pilot" else "pilot"
+        else:
+            for phase_number, role in enumerate(phase_roles, start=1):
+                for phase_iteration in range(1, max_phase_iterations + 1):
+                    dominance_reached = run_generation(role, phase_number, phase_iteration)
+                    if dominance_reached:
+                        break
+    finally:
+        progress_tracker.close()
 
     if pilot_model is None or enemy_model is None:
         raise RuntimeError("Training requires at least one pilot phase and one enemy phase.")
@@ -696,9 +775,11 @@ def train_self_play(
         "latest": history[-1],
         "checkpoints": checkpoints,
         "cycles": cycles,
+        "generationsPerSide": generations_per_side,
         "phaseTimesteps": phase_timesteps,
         "maxPhaseIterations": max_phase_iterations,
         "dominanceThreshold": dominance_threshold,
+        "netArch": DQN_NET_ARCH,
         "environment": {
             "name": "HeadlessGalagai",
             "openingEnemyPolicy": "drift-only bootstrap until the first learned enemy checkpoint exists",
@@ -750,6 +831,19 @@ def checkpoint_entry(role: str, model: DQN, version_id: int, metrics: dict[str, 
         "network": export_network(model),
         **metric_fields,
     }
+
+
+def checkpoint_filename(role: str, version_id: int) -> str:
+    prefix = "pilot" if role == "pilot" else "enemies"
+    return f"{prefix}-v{version_id:03d}.json"
+
+
+def manifest_checkpoint(entry: dict[str, object], url: str) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in entry.items()
+        if key != "network"
+    } | {"url": url}
 
 
 def evaluate(seed: int, pilot_policy: Policy, enemy_policy: Policy, episodes: int, max_steps: int) -> dict[str, object]:
@@ -827,6 +921,22 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
         "pilot": len(pilot_versions),
         "enemies": len(enemy_versions),
     }
+    model_dir = path.parent / MODEL_FILE_DIR
+    model_dir.mkdir(parents=True, exist_ok=True)
+    for stale_file in model_dir.glob("*.json"):
+        stale_file.unlink()
+
+    pilot_manifest_versions = []
+    for entry in pilot_versions:
+        filename = checkpoint_filename("pilot", int(entry["id"]))
+        (model_dir / filename).write_text(json.dumps(entry, separators=(",", ":")) + "\n", encoding="utf-8")
+        pilot_manifest_versions.append(manifest_checkpoint(entry, f"{MODEL_FILE_DIR}/{filename}"))
+
+    enemy_manifest_versions = []
+    for entry in enemy_versions:
+        filename = checkpoint_filename("enemies", int(entry["id"]))
+        (model_dir / filename).write_text(json.dumps(entry, separators=(",", ":")) + "\n", encoding="utf-8")
+        enemy_manifest_versions.append(manifest_checkpoint(entry, f"{MODEL_FILE_DIR}/{filename}"))
 
     payload = {
         "model": "sb3-dqn-pilot",
@@ -834,16 +944,16 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
         "algorithm": "stable-baselines3-dqn",
         "actions": PILOT_ACTIONS,
         "features": FEATURES,
-        "network": pilot_versions[-1]["network"],
+        "networkRef": pilot_manifest_versions[-1]["url"],
         "versions": {
-            "pilot": pilot_versions,
-            "enemies": enemy_versions,
+            "pilot": pilot_manifest_versions,
+            "enemies": enemy_manifest_versions,
         },
         "enemies": {
             "model": "sb3-dqn-enemies",
             "actions": ENEMY_ACTIONS,
             "features": FEATURES,
-            "network": enemy_versions[-1]["network"],
+            "networkRef": enemy_manifest_versions[-1]["url"],
             "constraints": {
                 "dropCooldownSeconds": DROP_COOLDOWN_SECONDS,
                 "shotCooldownSeconds": ENEMY_SHOT_COOLDOWN_SECONDS,
@@ -861,7 +971,17 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
+
+
+def artifact_summary(path: Path) -> dict[str, int]:
+    model_dir = path.parent / MODEL_FILE_DIR
+    checkpoint_files = list(model_dir.glob("*.json")) if model_dir.exists() else []
+    return {
+        "manifestBytes": path.stat().st_size if path.exists() else 0,
+        "checkpointFiles": len(checkpoint_files),
+        "checkpointBytes": sum(file.stat().st_size for file in checkpoint_files),
+    }
 
 
 def main() -> None:
@@ -870,12 +990,14 @@ def main() -> None:
     parser.add_argument("--phase-timesteps", type=int, default=2200)
     parser.add_argument("--dominance-threshold", type=float, default=0.6)
     parser.add_argument("--max-phase-iterations", type=int, default=3)
+    parser.add_argument("--generations-per-side", type=int, default=None)
     parser.add_argument("--rounds", type=int, default=None, help="Deprecated fixed alternation phase count.")
     parser.add_argument("--timesteps-per-round", type=int, default=None, help="Deprecated alias for --phase-timesteps.")
     parser.add_argument("--eval-episodes", type=int, default=40)
     parser.add_argument("--max-steps", type=int, default=420)
     parser.add_argument("--seed", type=int, default=20260607)
     parser.add_argument("--out", type=Path, default=Path("js/galagai-model.json"))
+    parser.add_argument("--no-progress", action="store_true", help="Disable tqdm progress output.")
     args = parser.parse_args()
 
     pilot_model, enemy_model, self_play = train_self_play(
@@ -886,25 +1008,31 @@ def main() -> None:
         max_steps=args.max_steps,
         dominance_threshold=args.dominance_threshold,
         max_phase_iterations=args.max_phase_iterations,
+        generations_per_side=args.generations_per_side,
         rounds=args.rounds,
         timesteps_per_round=args.timesteps_per_round,
+        progress=not args.no_progress,
     )
     write_model(args.out, pilot_model, enemy_model, self_play)
+    summary = artifact_summary(args.out)
     print(
         json.dumps(
             {
                 "model": str(args.out),
                 "algorithm": "stable-baselines3-dqn",
                 "cycles": self_play["cycles"],
+                "generationsPerSide": self_play["generationsPerSide"],
                 "phaseTimesteps": self_play["phaseTimesteps"],
                 "dominanceThreshold": self_play["dominanceThreshold"],
                 "maxPhaseIterations": self_play["maxPhaseIterations"],
+                "netArch": self_play["netArch"],
                 "roundsCompleted": len(self_play["rounds"]),
                 "checkpointCounts": {
                     "pilot": len(self_play["checkpoints"]["pilot"]),
                     "enemies": len(self_play["checkpoints"]["enemies"]),
                 },
                 "evalEpisodes": args.eval_episodes,
+                "artifact": summary,
                 "selfPlayLatest": self_play["latest"],
             },
             indent=2,

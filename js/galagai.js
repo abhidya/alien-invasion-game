@@ -44,6 +44,10 @@
   var enemyVersions = [];
   var activePilotVersion = 0;
   var activeEnemyVersion = 0;
+  var modelManifestUrl = "js/galagai-model.json";
+  var modelCache = {};
+  var pilotLoadTicket = 0;
+  var enemyLoadTicket = 0;
   var enemyAction = "hold";
   var lastTime = 0;
   var fireCooldown = 0;
@@ -64,13 +68,13 @@
   }
 
   function loadPilotModel() {
-    fetch("js/galagai-model.json")
+    fetch(modelManifestUrl)
       .then(function (response) {
         if (!response.ok) throw new Error("model unavailable");
         return response.json();
       })
       .then(function (model) {
-        if (!isUsableModel(model)) return;
+        if (!isUsableManifest(model)) return;
         pilotVersions = extractPilotVersions(model);
         enemyVersions = extractEnemyVersions(model);
         activePilotVersion = Math.max(0, pilotVersions.length - 1);
@@ -87,6 +91,14 @@
       });
   }
 
+  function isUsableManifest(model) {
+    return Boolean(
+      model &&
+      Array.isArray(model.actions) &&
+      (isUsableModel(model) || (model.versions && Array.isArray(model.versions.pilot)))
+    );
+  }
+
   function isUsableModel(model) {
     return Boolean(
       model &&
@@ -95,9 +107,17 @@
     );
   }
 
+  function isLoadableVersion(model) {
+    return Boolean(
+      model &&
+      Array.isArray(model.actions) &&
+      (isUsableModel(model) || model.url || model.networkRef)
+    );
+  }
+
   function extractPilotVersions(model) {
     var versions = model.versions && Array.isArray(model.versions.pilot)
-      ? model.versions.pilot.filter(isUsableModel)
+      ? model.versions.pilot.filter(isLoadableVersion)
       : [];
     if (versions.length) return versions;
     return [model];
@@ -105,17 +125,17 @@
 
   function extractEnemyVersions(model) {
     var versions = model.versions && Array.isArray(model.versions.enemies)
-      ? model.versions.enemies.filter(isUsableModel)
+      ? model.versions.enemies.filter(isLoadableVersion)
       : [];
     if (versions.length) return versions;
     return isUsableModel(model.enemies) ? [model.enemies] : [];
   }
 
   function applySelectedVersions() {
-    pilotModel = pilotVersions[activePilotVersion] || null;
-    enemyModel = enemyVersions[activeEnemyVersion] || null;
     configureVersionSlider(versionNodes.pilotSlider, pilotVersions, activePilotVersion);
     configureVersionSlider(versionNodes.enemySlider, enemyVersions, activeEnemyVersion);
+    loadSelectedVersion("pilot");
+    loadSelectedVersion("enemies");
   }
 
   function configureVersionSlider(slider, versions, activeIndex) {
@@ -135,6 +155,55 @@
     }
     applySelectedVersions();
     updateHud();
+  }
+
+  function loadSelectedVersion(kind) {
+    var versions = kind === "pilot" ? pilotVersions : enemyVersions;
+    var activeIndex = kind === "pilot" ? activePilotVersion : activeEnemyVersion;
+    var entry = versions[activeIndex] || null;
+    var ticket;
+    if (kind === "pilot") {
+      ticket = pilotLoadTicket + 1;
+      pilotLoadTicket = ticket;
+      pilotModel = isUsableModel(entry) ? entry : null;
+    } else {
+      ticket = enemyLoadTicket + 1;
+      enemyLoadTicket = ticket;
+      enemyModel = isUsableModel(entry) ? entry : null;
+    }
+    if (!entry || isUsableModel(entry)) return;
+
+    hydrateVersion(entry)
+      .then(function (model) {
+        if (kind === "pilot" && ticket === pilotLoadTicket && activeIndex === activePilotVersion) {
+          pilotModel = model;
+        } else if (kind === "enemies" && ticket === enemyLoadTicket && activeIndex === activeEnemyVersion) {
+          enemyModel = model;
+        }
+        updateHud();
+      })
+      .catch(function () {
+        if (kind === "pilot" && ticket === pilotLoadTicket) pilotModel = null;
+        if (kind === "enemies" && ticket === enemyLoadTicket) enemyModel = null;
+        updateHud();
+      });
+  }
+
+  function hydrateVersion(entry) {
+    var url = entry.url || entry.networkRef;
+    if (!url) return Promise.resolve(entry);
+    var absoluteUrl = new URL(url, new URL(modelManifestUrl, window.location.href)).toString();
+    if (!modelCache[absoluteUrl]) {
+      modelCache[absoluteUrl] = fetch(absoluteUrl)
+        .then(function (response) {
+          if (!response.ok) throw new Error("checkpoint unavailable");
+          return response.json();
+        })
+        .then(function (model) {
+          return Object.assign({}, entry, model);
+        });
+    }
+    return modelCache[absoluteUrl];
   }
 
   function createInitialState() {
@@ -215,12 +284,14 @@
   }
 
   function updateCheckpointPanel() {
-    var metrics = modelMetrics(pilotModel);
+    var pilotEntry = pilotVersions[activePilotVersion] || null;
+    var enemyEntry = enemyVersions[activeEnemyVersion] || null;
+    var metrics = modelMetrics(pilotModel || pilotEntry);
     var selfPlay = metrics && metrics.selfPlay ? metrics.selfPlay : null;
     var latest = selfPlay && selfPlay.latest ? selfPlay.latest : null;
 
-    checkpointNodes.modelName.textContent = pilotModel ? modelLabel(pilotModel) : "heuristic";
-    checkpointNodes.enemyModelName.textContent = enemyModel ? modelLabel(enemyModel) : "scripted";
+    checkpointNodes.modelName.textContent = pilotEntry ? modelLabel(pilotModel || pilotEntry) : "heuristic";
+    checkpointNodes.enemyModelName.textContent = enemyEntry ? modelLabel(enemyModel || enemyEntry) : "scripted";
     checkpointNodes.evalAccuracy.textContent = metrics ? percent(metrics.evalAccuracy) : "--";
     checkpointNodes.selfPlayRound.textContent = latest ? latest.round : "--";
     checkpointNodes.trainedSide.textContent = latest ? latest.trained : "--";
@@ -228,10 +299,10 @@
     checkpointNodes.pilotWinRate.textContent = latest ? percent(latest.enemyWinRate) : "--";
     checkpointNodes.enemyPressure.textContent = latest ? percent(latest.enemyDropRate) : "--";
     if (versionNodes.pilotLabel) {
-      versionNodes.pilotLabel.textContent = pilotModel ? versionLabel(pilotModel, activePilotVersion, pilotVersions.length) : "none";
+      versionNodes.pilotLabel.textContent = pilotEntry ? versionLabel(pilotModel || pilotEntry, activePilotVersion, pilotVersions.length) : "none";
     }
     if (versionNodes.enemyLabel) {
-      versionNodes.enemyLabel.textContent = enemyModel ? versionLabel(enemyModel, activeEnemyVersion, enemyVersions.length) : "none";
+      versionNodes.enemyLabel.textContent = enemyEntry ? versionLabel(enemyModel || enemyEntry, activeEnemyVersion, enemyVersions.length) : "none";
     }
   }
 

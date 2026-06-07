@@ -49,7 +49,7 @@ python3.12 -m venv .venv-rl
 . .venv-rl/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements-static-pilot.txt
-python tools/train_static_pilot.py --cycles 2 --phase-timesteps 5000 --max-phase-iterations 3 --dominance-threshold 0.6
+python tools/train_static_pilot.py --generations-per-side 100 --phase-timesteps 500 --max-phase-iterations 5 --eval-episodes 8 --max-steps 320 --dominance-threshold 0.6
 ```
 
 The RL requirements stay on the latest SB3 line that installs with this Python
@@ -63,41 +63,53 @@ Latest checked-in training run:
   "model": "js/galagai-model.json",
   "algorithm": "stable-baselines3-dqn",
   "cycles": 2,
-  "phaseTimesteps": 5000,
+  "generationsPerSide": 100,
+  "phaseTimesteps": 500,
   "dominanceThreshold": 0.6,
-  "maxPhaseIterations": 3,
-  "roundsCompleted": 7,
+  "maxPhaseIterations": 5,
+  "netArch": [
+    64,
+    64
+  ],
+  "roundsCompleted": 200,
   "checkpointCounts": {
-    "pilot": 4,
-    "enemies": 3
+    "pilot": 100,
+    "enemies": 100
   },
-  "evalEpisodes": 40,
+  "evalEpisodes": 8,
+  "artifact": {
+    "manifestBytes": 202485,
+    "checkpointFiles": 200,
+    "checkpointBytes": 9919873
+  },
   "selfPlayLatest": {
-    "round": 7,
-    "phase": 4,
+    "round": 200,
+    "phase": 89,
     "phaseIteration": 2,
     "trained": "enemies",
+    "generation": 100,
     "dominanceMetric": "enemyWinRate",
     "dominanceThreshold": 0.6,
-    "dominanceReached": true,
-    "pilotWinRate": 0.0,
-    "enemyWinRate": 1.0,
-    "averageScore": 250.0,
+    "dominanceReached": false,
+    "pilotWinRate": 1.0,
+    "enemyWinRate": 0.0,
+    "averageScore": 200.0,
     "averageWave": 1.0,
-    "averageSteps": 86.0,
+    "averageSteps": 320.0,
     "enemyDropRate": 0.0,
     "invalidDropRate": 0.0,
-    "enemyFireRate": 0.0349,
-    "pilotFireRate": 0.2558
+    "enemyFireRate": 0.0,
+    "pilotFireRate": 0.2437
   }
 }
 ```
 
 This artifact contains an exported DQN Q-network for the pilot and a separate
-exported DQN Q-network for the enemies. It also contains version arrays for both
-sides. The browser uses the selected pilot network for ship movement/fire and
-the selected enemy network for fleet drift, cooldown-limited drops, and enemy
-fire.
+exported DQN Q-network for the enemies. `js/galagai-model.json` is now a compact
+manifest; the full checkpoint networks live in `js/galagai-models/` as separate
+per-version files. The browser uses the selected pilot network for ship
+movement/fire and lazily fetches the selected enemy network for fleet drift,
+cooldown-limited drops, and enemy fire.
 
 First create your fork of the repository, then clone using:
 ```
@@ -138,12 +150,16 @@ python3.12 -m venv .venv-rl
 . .venv-rl/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements-ml.txt
-python tools/train_static_pilot.py --cycles 2 --phase-timesteps 5000 --max-phase-iterations 3 --dominance-threshold 0.6
+python tools/train_static_pilot.py --generations-per-side 100 --phase-timesteps 500 --max-phase-iterations 5 --eval-episodes 8 --max-steps 320 --dominance-threshold 0.6
 ```
 
-The static trainer writes `js/galagai-model.json` for GitHub Pages. The checked-in
-`alien_invasion/weights.hdf5` file is a legacy TensorFlow artifact preserved only
-for inspection.
+The static trainer writes `js/galagai-model.json` plus checkpoint files under
+`js/galagai-models/` for GitHub Pages. The checked-in `alien_invasion/weights.hdf5`
+file is a legacy TensorFlow artifact preserved only for inspection.
+
+The CLI uses tqdm progress by default and prints ETA, side/generation counts,
+win-rate postfix metrics, drop/invalid-drop rates, and final artifact size
+summary. Pass `--no-progress` for quiet CI logs.
 
 For a future Gymnasium adapter, `alien_invasion/gym_space.py` documents the
 modern `reset` and `step` shape:
