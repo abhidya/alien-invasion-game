@@ -60,7 +60,9 @@ pushes `master`, mirrors the same static files to `gh-pages`, and checks the
 public Pages manifest. Use `--target-rounds <n>` instead of `--add-rounds` when
 you want an absolute round target. If you press Ctrl-C after at least one new
 generation checkpoint is complete, the wrapper exports and publishes the latest
-completed checkpoint instead of throwing away the run.
+completed checkpoint instead of throwing away the run. The final public Pages
+manifest check retries for several minutes by default; tune it with
+`--public-check-attempts` and `--public-check-delay` if GitHub Pages is slow.
 
 The RL requirements stay on the newest SB3 line that installs with this Python
 3.12 environment's available torch wheels. At the time of this update, PyPI
