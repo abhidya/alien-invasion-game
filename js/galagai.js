@@ -175,9 +175,9 @@
   }
 
   function enemyIndexForWave(wave) {
-    if (wave <= 1 || !enemyVersions.length) return -1;
+    if (!enemyVersions.length) return -1;
     if (enemyVersions.length === 1) return 0;
-    var progress = clamp((wave - 2) / 8, 0, 1);
+    var progress = clamp((wave - 1) / 8, 0, 1);
     return Math.min(enemyVersions.length - 1, Math.round(progress * (enemyVersions.length - 1)));
   }
 
@@ -370,7 +370,6 @@
   }
 
   function enemyDisplayLabel(model) {
-    if (enemyMode === "progression" && state.wave <= 1) return "CPU bees (wave 1)";
     if (!model) return enemyMode === "progression" ? "progression loading" : "scripted";
     return enemyMode === "progression"
       ? "Progression " + versionLabel(model, activeEnemyVersion, enemyVersions.length)

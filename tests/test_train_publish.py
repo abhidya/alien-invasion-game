@@ -36,6 +36,14 @@ class TrainPublishTest(unittest.TestCase):
     def test_default_checkpoint_dir_uses_current_schema_line(self):
         self.assertEqual(train_publish.DEFAULT_CHECKPOINT_DIR, Path(".training-checkpoints/galagai-balanced-v13"))
 
+    def test_add_rounds_command_requires_new_rounds_after_resume(self):
+        args = self._args(Path(".training-checkpoints/galagai-balanced-v13"))
+
+        command = train_publish.build_train_command(args, target_rounds=300, required_new_balanced_rounds=43)
+
+        required_index = command.index("--required-new-balanced-rounds")
+        self.assertEqual(command[required_index + 1], "43")
+
     def test_interrupt_exports_recovered_completed_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_dir = Path(tmpdir) / "checkpoints"
@@ -64,6 +72,8 @@ class TrainPublishTest(unittest.TestCase):
         self.assertIn("--candidate-spawns", calls[1])
         target_index = calls[1].index("--balanced-rounds")
         self.assertEqual(calls[1][target_index + 1], "2")
+        required_index = calls[1].index("--required-new-balanced-rounds")
+        self.assertEqual(calls[1][required_index + 1], "0")
 
     def test_public_manifest_check_retries_until_pages_updates(self):
         expected = {

@@ -102,6 +102,7 @@ def build_train_command(
     args: argparse.Namespace,
     target_rounds: int,
     *,
+    required_new_balanced_rounds: int = 0,
     force_resume: bool = False,
     force_no_progress: bool = False,
 ) -> list[str]:
@@ -114,6 +115,8 @@ def build_train_command(
         str(target_rounds),
         "--min-balanced-rounds",
         str(args.min_balanced_rounds),
+        "--required-new-balanced-rounds",
+        str(max(0, required_new_balanced_rounds)),
         "--balance-tolerance",
         str(args.balance_tolerance),
         "--balance-patience",
@@ -152,9 +155,20 @@ def build_train_command(
     return command
 
 
-def run_training(args: argparse.Namespace, target_rounds: int, current_rounds: int) -> bool:
+def run_training(
+    args: argparse.Namespace,
+    target_rounds: int,
+    current_rounds: int,
+    *,
+    required_new_balanced_rounds: int | None = None,
+) -> bool:
+    required_new_balanced_rounds = (
+        max(0, target_rounds - current_rounds)
+        if required_new_balanced_rounds is None
+        else max(0, required_new_balanced_rounds)
+    )
     try:
-        run(build_train_command(args, target_rounds))
+        run(build_train_command(args, target_rounds, required_new_balanced_rounds=required_new_balanced_rounds))
         return False
     except KeyboardInterrupt:
         interrupted = True
@@ -188,6 +202,7 @@ def run_training(args: argparse.Namespace, target_rounds: int, current_rounds: i
         build_train_command(
             args,
             recovered_rounds,
+            required_new_balanced_rounds=0,
             force_resume=True,
             force_no_progress=True,
         )
@@ -375,10 +390,26 @@ def main() -> None:
     if target_rounds < current_rounds:
         raise RuntimeError(f"Target rounds {target_rounds} is behind current checkpoint rounds {current_rounds}.")
 
-    print(json.dumps({"currentRounds": current_rounds, "targetRounds": target_rounds}, indent=2), flush=True)
+    required_new_balanced_rounds = max(0, target_rounds - current_rounds)
+    print(
+        json.dumps(
+            {
+                "currentRounds": current_rounds,
+                "targetRounds": target_rounds,
+                "requiredNewBalancedRounds": required_new_balanced_rounds,
+            },
+            indent=2,
+        ),
+        flush=True,
+    )
     interrupted = False
     if not args.no_train:
-        interrupted = run_training(args, target_rounds, current_rounds)
+        interrupted = run_training(
+            args,
+            target_rounds,
+            current_rounds,
+            required_new_balanced_rounds=required_new_balanced_rounds,
+        )
 
     summary = verify_artifacts(args.model, skip_tests=args.skip_tests)
     if interrupted:

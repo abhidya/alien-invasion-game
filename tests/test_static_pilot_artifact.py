@@ -278,6 +278,38 @@ class StaticPilotArtifactTest(unittest.TestCase):
             )
         )
 
+    def test_balanced_stop_waits_for_required_new_rounds_after_resume(self):
+        history = [
+            {"pilotWinRate": 0.45, "enemyWinRate": 0.35},
+            {"pilotWinRate": 0.4, "enemyWinRate": 0.35},
+            {"pilotWinRate": 0.5, "enemyWinRate": 0.4},
+        ]
+
+        self.assertFalse(
+            train_static_pilot.balanced_stop_reached_after_required_rounds(
+                history,
+                completed_generations=3,
+                required_new_balanced_rounds=1,
+                min_balanced_rounds=2,
+                balance_patience=2,
+                dominance_threshold=0.6,
+                balance_tolerance=0.18,
+                balance_min_win_rate=0.25,
+            )
+        )
+        self.assertTrue(
+            train_static_pilot.balanced_stop_reached_after_required_rounds(
+                [*history, {"pilotWinRate": 0.45, "enemyWinRate": 0.35}],
+                completed_generations=3,
+                required_new_balanced_rounds=1,
+                min_balanced_rounds=2,
+                balance_patience=2,
+                dominance_threshold=0.6,
+                balance_tolerance=0.18,
+                balance_min_win_rate=0.25,
+            )
+        )
+
     def test_tiered_retention_keeps_latest_and_sparse_history(self):
         retention = train_static_pilot.CheckpointRetention(mode="tiered", keep_latest=5)
 

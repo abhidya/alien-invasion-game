@@ -1263,6 +1263,30 @@ def balanced_stop_reached(
     )
 
 
+def balanced_stop_reached_after_required_rounds(
+    history: list[dict[str, object]],
+    *,
+    completed_generations: int,
+    required_new_balanced_rounds: int,
+    min_balanced_rounds: int,
+    balance_patience: int,
+    dominance_threshold: float,
+    balance_tolerance: float,
+    balance_min_win_rate: float,
+) -> bool:
+    required_total = completed_generations + max(0, required_new_balanced_rounds)
+    if len(history) < required_total:
+        return False
+    return balanced_stop_reached(
+        history,
+        min_balanced_rounds=min_balanced_rounds,
+        balance_patience=balance_patience,
+        dominance_threshold=dominance_threshold,
+        balance_tolerance=balance_tolerance,
+        balance_min_win_rate=balance_min_win_rate,
+    )
+
+
 def choose_balanced_role(
     latest_metrics: dict[str, object] | None,
     checkpoints: dict[str, list[dict[str, object]]],
@@ -1513,6 +1537,7 @@ def train_self_play(
     generations_per_side: int | None = None,
     balanced_rounds: int | None = None,
     min_balanced_rounds: int = 6,
+    required_new_balanced_rounds: int = 0,
     balance_tolerance: float = 0.18,
     balance_patience: int = 3,
     balance_min_win_rate: float = 0.25,
@@ -1531,6 +1556,7 @@ def train_self_play(
         phase_timesteps = timesteps_per_round
     if balanced_rounds is not None and balanced_rounds < 2:
         raise ValueError("balanced_rounds must be at least 2 so both roles can get a checkpoint.")
+    required_new_balanced_rounds = max(0, int(required_new_balanced_rounds))
     train_workers = max(1, int(train_workers))
     eval_workers = max(1, int(eval_workers))
     curriculum_waves = max(1, int(curriculum_waves))
@@ -1581,6 +1607,7 @@ def train_self_play(
         "generationsPerSide": generations_per_side,
         "balancedRounds": balanced_rounds,
         "minBalancedRounds": min_balanced_rounds,
+        "requiredNewBalancedRounds": required_new_balanced_rounds,
         "balanceTolerance": balance_tolerance,
         "balancePatience": balance_patience,
         "balanceMinWinRate": balance_min_win_rate,
@@ -1764,8 +1791,10 @@ def train_self_play(
         if balanced_rounds is not None:
             phase_number = phase_number_offset
             while len(history) < balanced_rounds:
-                if balanced_stop_reached(
+                if balanced_stop_reached_after_required_rounds(
                     history,
+                    completed_generations=completed_generations,
+                    required_new_balanced_rounds=required_new_balanced_rounds,
                     min_balanced_rounds=min_balanced_rounds,
                     balance_patience=balance_patience,
                     dominance_threshold=dominance_threshold,
@@ -1783,8 +1812,10 @@ def train_self_play(
                     if len(history) >= balanced_rounds:
                         break
                     dominance_reached = run_generation(role, phase_number, phase_iteration)
-                    if dominance_reached or balanced_stop_reached(
+                    if dominance_reached or balanced_stop_reached_after_required_rounds(
                         history,
+                        completed_generations=completed_generations,
+                        required_new_balanced_rounds=required_new_balanced_rounds,
                         min_balanced_rounds=min_balanced_rounds,
                         balance_patience=balance_patience,
                         dominance_threshold=dominance_threshold,
@@ -1851,6 +1882,7 @@ def train_self_play(
         "generationsPerSide": generations_per_side,
         "balancedRounds": balanced_rounds,
         "minBalancedRounds": min_balanced_rounds,
+        "requiredNewBalancedRounds": required_new_balanced_rounds,
         "balanceTolerance": balance_tolerance,
         "balancePatience": balance_patience,
         "balanceMinWinRate": balance_min_win_rate,
@@ -2146,6 +2178,12 @@ def main() -> None:
     parser.add_argument("--generations-per-side", type=int, default=None)
     parser.add_argument("--balanced-rounds", type=int, default=None, help="Maximum adaptive dominance-balanced generations.")
     parser.add_argument("--min-balanced-rounds", type=int, default=6)
+    parser.add_argument(
+        "--required-new-balanced-rounds",
+        type=int,
+        default=0,
+        help="Require this many new balanced generations after resume before the balance stop gate can end training.",
+    )
     parser.add_argument("--balance-tolerance", type=float, default=0.18)
     parser.add_argument("--balance-patience", type=int, default=3)
     parser.add_argument("--balance-min-win-rate", type=float, default=0.25)
@@ -2194,6 +2232,7 @@ def main() -> None:
         generations_per_side=args.generations_per_side,
         balanced_rounds=args.balanced_rounds,
         min_balanced_rounds=args.min_balanced_rounds,
+        required_new_balanced_rounds=args.required_new_balanced_rounds,
         balance_tolerance=args.balance_tolerance,
         balance_patience=args.balance_patience,
         balance_min_win_rate=args.balance_min_win_rate,
@@ -2219,6 +2258,7 @@ def main() -> None:
                 "generationsPerSide": self_play["generationsPerSide"],
                 "balancedRounds": self_play["balancedRounds"],
                 "minBalancedRounds": self_play["minBalancedRounds"],
+                "requiredNewBalancedRounds": self_play["requiredNewBalancedRounds"],
                 "balanceTolerance": self_play["balanceTolerance"],
                 "balancePatience": self_play["balancePatience"],
                 "balanceMinWinRate": self_play["balanceMinWinRate"],
