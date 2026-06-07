@@ -87,10 +87,10 @@ ACTION_DT = 0.12
 DROP_COOLDOWN_SECONDS = 1.08
 ENEMY_SHOT_COOLDOWN_SECONDS = 0.0
 INVALID_DROP_PENALTY = 0.90
-MODEL_SCHEMA_VERSION = 12
+MODEL_SCHEMA_VERSION = 13
 DQN_NET_ARCH = [64, 64]
 MODEL_FILE_DIR = "galagai-models"
-DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v12")
+DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v13")
 RETENTION_LATEST_DEFAULT = 12
 
 
@@ -497,7 +497,7 @@ class HeadlessGalagai:
             self.ship.y += SHIP_VERTICAL_SPEED * ACTION_DT
         elif pilot_action != 3:
             raise ValueError(f"Unknown pilot action {pilot_action}.")
-        self.ship.x = self._clamp(self.ship.x, 18.0, CANVAS_WIDTH - SHIP_WIDTH - 18.0)
+        self.wrap_ship_horizontal()
         self.ship.y = self._clamp(self.ship.y, SHIP_MIN_Y, SHIP_MAX_Y)
 
         if enemy_action == 0:
@@ -711,6 +711,12 @@ class HeadlessGalagai:
             alien.x = CANVAS_WIDTH
         elif alien.x > CANVAS_WIDTH:
             alien.x = -alien.width
+
+    def wrap_ship_horizontal(self) -> None:
+        if self.ship.x + self.ship.width < 0.0:
+            self.ship.x = CANVAS_WIDTH
+        elif self.ship.x > CANVAS_WIDTH:
+            self.ship.x = -self.ship.width
 
     def resolve_collisions(self) -> dict[str, int]:
         aliens_hit = 0

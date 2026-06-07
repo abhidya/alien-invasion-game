@@ -54,7 +54,7 @@ python tools/train_publish.py --add-rounds 24
 ```
 
 `tools/train_publish.py` is the normal self-serve workflow. It resumes from
-`.training-checkpoints/galagai-balanced-v12`, trains the next balanced rounds,
+`.training-checkpoints/galagai-balanced-v13`, trains the next balanced rounds,
 exports static JSON, prunes retained model files, runs verification, commits and
 pushes `master`, mirrors the same static files to `gh-pages`, and checks the
 public Pages manifest. Use `--target-rounds <n>` instead of `--add-rounds` when
@@ -193,7 +193,7 @@ file is a legacy TensorFlow artifact preserved only for inspection.
 The CLI uses tqdm progress by default and prints ETA, side/generation counts,
 win-rate postfix metrics, drop/invalid-drop rates, and final artifact size
 summary. It checkpoints after every completed generation to
-`.training-checkpoints/galagai-balanced-v12` by default, including the SB3 model, replay
+`.training-checkpoints/galagai-balanced-v13` by default, including the SB3 model, replay
 buffer, exported generation JSON, and resumable `state.json`. Pass
 `--resume` to continue from that checkpoint directory, `--checkpoint-dir <path>`
 to change the location, `--no-checkpoints` for a throwaway run,

@@ -54,6 +54,19 @@ class StaticPilotArtifactTest(unittest.TestCase):
 
         self.assertEqual(alien.x, train_static_pilot.CANVAS_WIDTH)
 
+    def test_pilot_wraps_horizontally_instead_of_clamping(self):
+        env = train_static_pilot.HeadlessGalagai(seed=25, max_steps=20)
+
+        env.ship.x = train_static_pilot.CANVAS_WIDTH + 1
+        env.wrap_ship_horizontal()
+
+        self.assertEqual(env.ship.x, -env.ship.width)
+
+        env.ship.x = -env.ship.width - 1
+        env.wrap_ship_horizontal()
+
+        self.assertEqual(env.ship.x, train_static_pilot.CANVAS_WIDTH)
+
     def test_enemy_crashing_into_pilot_kills_both(self):
         env = train_static_pilot.HeadlessGalagai(seed=23, max_steps=20)
         alien = env.aliens[0]
@@ -356,7 +369,7 @@ class StaticPilotArtifactTest(unittest.TestCase):
             pilot_payload = json.loads((path.parent / payload["networkRef"]).read_text(encoding="utf-8"))
             enemy_payload = json.loads((path.parent / payload["enemies"]["networkRef"]).read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["version"], 12)
+        self.assertEqual(payload["version"], 13)
         self.assertEqual(payload["algorithm"], "stable-baselines3-dqn")
         self.assertEqual(payload["actions"], train_static_pilot.PILOT_ACTIONS)
         self.assertEqual(payload["features"], train_static_pilot.FEATURES)
