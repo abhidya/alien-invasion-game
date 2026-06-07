@@ -717,10 +717,18 @@
     } else {
       state.ship.x += direction * state.ship.speed * dt;
     }
-    state.ship.x = clamp(state.ship.x, 18, canvas.width - state.ship.width - 18);
+    wrapShipHorizontal();
     state.ship.y += verticalDirection * state.ship.verticalSpeed * dt;
     state.ship.y = clamp(state.ship.y, canvas.height - 170, canvas.height - 56);
     if (keys.Space) fire();
+  }
+
+  function wrapShipHorizontal() {
+    if (state.ship.x + state.ship.width < 0) {
+      state.ship.x = canvas.width;
+    } else if (state.ship.x > canvas.width) {
+      state.ship.x = -state.ship.width;
+    }
   }
 
   function updateBullets(dt) {
