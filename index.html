@@ -15,8 +15,9 @@
         <p class="eyebrow">Static playable demo</p>
         <h1 id="page-title">GalagAI</h1>
         <p>
-          A browser-safe remake of the repo's Pygame alien invasion loop. Play it here,
-          switch on the trained pilot, then inspect the Python source and DQN self-play trainer.
+          A browser-safe remake of the repo's Pygame alien invasion loop. Pick a pilot
+          generation, let progression mode climb enemy generations by wave, then inspect the
+          Python source and DQN self-play trainer.
         </p>
       </div>
       <div class="hero-actions" aria-label="Project links">
@@ -44,6 +45,7 @@
       <div class="controls">
         <button id="start-button" type="button">Start</button>
         <button id="ai-button" type="button" aria-pressed="false">Pilot: manual</button>
+        <button id="enemy-mode-button" type="button" aria-pressed="true">Enemies: progression</button>
         <button id="reset-button" type="button">Reset</button>
       </div>
       <div class="version-controls" aria-label="Model checkpoint selectors">
@@ -87,8 +89,8 @@
         <h2>AI status</h2>
         <p>
           The browser pilot and enemies use the latest exported SB3 DQN self-play artifact.
-          The pilot controls ship movement and fire; the enemy model controls fleet pressure
-          and cooldown-limited shots/drops.
+          The pilot controls ship movement and fire; bees, butterflies, and bosses expose
+          different enemy actions so the trained enemy model cannot give every ship every move.
         </p>
       </article>
       <article>

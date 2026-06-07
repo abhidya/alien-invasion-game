@@ -9,6 +9,7 @@
   var bestNode = document.getElementById("best");
   var startButton = document.getElementById("start-button");
   var aiButton = document.getElementById("ai-button");
+  var enemyModeButton = document.getElementById("enemy-mode-button");
   var resetButton = document.getElementById("reset-button");
   var checkpointNodes = {
     modelName: document.getElementById("model-name"),
@@ -38,6 +39,7 @@
   var bestScore = Number(localStorage.getItem("galagai-best") || 0);
   var running = false;
   var pilot = false;
+  var enemyMode = "progression";
   var pilotModel = null;
   var enemyModel = null;
   var pilotVersions = [];
@@ -135,7 +137,7 @@
     configureVersionSlider(versionNodes.pilotSlider, pilotVersions, activePilotVersion);
     configureVersionSlider(versionNodes.enemySlider, enemyVersions, activeEnemyVersion);
     loadSelectedVersion("pilot");
-    loadSelectedVersion("enemies");
+    updateEnemyModelForMode();
   }
 
   function configureVersionSlider(slider, versions, activeIndex) {
@@ -152,9 +154,31 @@
       activePilotVersion = Math.min(index, Math.max(0, pilotVersions.length - 1));
     } else {
       activeEnemyVersion = Math.min(index, Math.max(0, enemyVersions.length - 1));
+      enemyMode = "manual";
     }
     applySelectedVersions();
     updateHud();
+  }
+
+  function updateEnemyModelForMode() {
+    if (enemyMode === "progression") {
+      var progressionIndex = enemyIndexForWave(state.wave);
+      if (progressionIndex < 0) {
+        enemyModel = null;
+        configureVersionSlider(versionNodes.enemySlider, enemyVersions, activeEnemyVersion);
+        return;
+      }
+      activeEnemyVersion = progressionIndex;
+    }
+    configureVersionSlider(versionNodes.enemySlider, enemyVersions, activeEnemyVersion);
+    loadSelectedVersion("enemies");
+  }
+
+  function enemyIndexForWave(wave) {
+    if (wave <= 1 || !enemyVersions.length) return -1;
+    if (enemyVersions.length === 1) return 0;
+    var progress = clamp((wave - 2) / 8, 0, 1);
+    return Math.min(enemyVersions.length - 1, Math.round(progress * (enemyVersions.length - 1)));
   }
 
   function loadSelectedVersion(kind) {
@@ -243,12 +267,24 @@
           width: 48,
           height: 34,
           type: (row + col) % 2,
+          role: enemyRoleForSlot(row, col, wave),
           alive: true,
-          wobble: Math.random() * Math.PI * 2
+          wobble: Math.random() * Math.PI * 2,
+          homeX: startX + col * gapX,
+          homeY: 74 + row * gapY,
+          free: false,
+          loop: false,
+          scatter: 0
         });
       }
     }
     return aliens;
+  }
+
+  function enemyRoleForSlot(row, col, wave) {
+    if (wave >= 3 && row === 0 && col % 3 === 1) return "boss";
+    if (wave >= 2 && row <= 1 && col % 2 === 0) return "butterfly";
+    return "bee";
   }
 
   function startGame() {
@@ -256,6 +292,7 @@
     running = true;
     lastTime = performance.now();
     state.message = "";
+    updateEnemyModelForMode();
     updateHud();
   }
 
@@ -280,6 +317,10 @@
       aiButton.textContent = pilotModel ? "Pilot: trained" : "Pilot: heuristic";
     }
     aiButton.setAttribute("aria-pressed", pilot ? "true" : "false");
+    if (enemyModeButton) {
+      enemyModeButton.textContent = enemyMode === "progression" ? "Enemies: progression" : "Enemies: slider";
+      enemyModeButton.setAttribute("aria-pressed", enemyMode === "progression" ? "true" : "false");
+    }
     updateCheckpointPanel();
   }
 
@@ -291,18 +332,18 @@
     var latest = selfPlay && selfPlay.latest ? selfPlay.latest : null;
 
     checkpointNodes.modelName.textContent = pilotEntry ? modelLabel(pilotModel || pilotEntry) : "heuristic";
-    checkpointNodes.enemyModelName.textContent = enemyEntry ? modelLabel(enemyModel || enemyEntry) : "scripted";
+    checkpointNodes.enemyModelName.textContent = enemyDisplayLabel(enemyModel || enemyEntry);
     checkpointNodes.evalAccuracy.textContent = metrics ? percent(metrics.evalAccuracy) : "--";
     checkpointNodes.selfPlayRound.textContent = latest ? latest.round : "--";
     checkpointNodes.trainedSide.textContent = latest ? latest.trained : "--";
-    checkpointNodes.enemyAction.textContent = enemyModel ? enemyAction : "--";
+    checkpointNodes.enemyAction.textContent = enemyAction || "--";
     checkpointNodes.pilotWinRate.textContent = latest ? percent(latest.enemyWinRate) : "--";
     checkpointNodes.enemyPressure.textContent = latest ? percent(latest.enemyDropRate) : "--";
     if (versionNodes.pilotLabel) {
       versionNodes.pilotLabel.textContent = pilotEntry ? versionLabel(pilotModel || pilotEntry, activePilotVersion, pilotVersions.length) : "none";
     }
     if (versionNodes.enemyLabel) {
-      versionNodes.enemyLabel.textContent = enemyEntry ? versionLabel(enemyModel || enemyEntry, activeEnemyVersion, enemyVersions.length) : "none";
+      versionNodes.enemyLabel.textContent = enemyDisplayLabel(enemyModel || enemyEntry);
     }
   }
 
@@ -325,6 +366,14 @@
 
   function versionLabel(model, activeIndex, count) {
     return modelLabel(model) + " (" + (activeIndex + 1) + "/" + Math.max(count, 1) + ")";
+  }
+
+  function enemyDisplayLabel(model) {
+    if (enemyMode === "progression" && state.wave <= 1) return "CPU bees (wave 1)";
+    if (!model) return enemyMode === "progression" ? "progression loading" : "scripted";
+    return enemyMode === "progression"
+      ? "Progression " + versionLabel(model, activeEnemyVersion, enemyVersions.length)
+      : versionLabel(model, activeEnemyVersion, enemyVersions.length);
   }
 
   function percent(value) {
@@ -358,6 +407,7 @@
       state.fleetDirection = 1;
       state.fleetSpeed += 13;
       state.score += 250;
+      updateEnemyModelForMode();
       updateHud();
     }
   }
@@ -433,25 +483,95 @@
     var liveAliens = state.aliens.filter(function (alien) { return alien.alive; });
     if (!liveAliens.length) return;
 
-    var action = predictModelAction(enemyModel, "drop");
-    enemyAction = action;
+    enemyAction = applyEnemyAction(predictModelAction(enemyModel, "drift_right"), liveAliens);
+    enemyThinkCooldown = Math.max(0.08, 0.20 - state.wave * 0.01);
+    updateHud();
+  }
+
+  function applyEnemyAction(action, liveAliens) {
     if (action === "drift_left") {
       state.fleetDirection = -1;
-    } else if (action === "drift_right") {
-      state.fleetDirection = 1;
-    } else if (action === "drop" && enemyDropCooldown <= 0) {
-      liveAliens.forEach(function (alien) { alien.y += state.fleetDrop * 0.65; });
-      enemyDropCooldown = 1.08;
-    } else if (action === "drop") {
-      enemyAction = "drop-cooldown";
-    } else if (action === "fire" && enemyShotCooldown <= 0) {
-      fireAlienShot(nearestThreat() || liveAliens[Math.floor(Math.random() * liveAliens.length)]);
-      enemyShotCooldown = 0.42;
-    } else if (action === "fire") {
-      enemyAction = "fire-cooldown";
+      return "bees drift left";
     }
-    enemyThinkCooldown = Math.max(0.12, 0.24 - state.wave * 0.008);
-    updateHud();
+    if (action === "drift_right") {
+      state.fleetDirection = 1;
+      return "bees drift right";
+    }
+    if (action === "drift_left_fire") {
+      state.fleetDirection = -1;
+      return fireRoleShot(["boss", "butterfly"]) ? "boss/butterfly left+fire" : "bees drift left";
+    }
+    if (action === "drift_right_fire") {
+      state.fleetDirection = 1;
+      return fireRoleShot(["boss", "butterfly"]) ? "boss/butterfly right+fire" : "bees drift right";
+    }
+    if (action === "drop") {
+      if (enemyDropCooldown > 0) return "drop-cooldown";
+      liveAliens.filter(function (alien) { return alien.role === "bee"; }).forEach(function (alien) {
+        alien.y += state.fleetDrop * 0.65;
+      });
+      enemyDropCooldown = 1.08;
+      return "bees drop";
+    }
+    if (action === "fire") {
+      return fireRoleShot(["boss", "butterfly"]) ? "boss/butterfly fire" : "bees drift";
+    }
+    if (action === "dive") {
+      return launchRoleDive(["butterfly", "boss"]) ? "butterfly dive" : "bees drift";
+    }
+    if (action === "loop") {
+      return startRoleLoop(["boss"]) ? "boss loop" : "butterfly weave";
+    }
+    if (action === "scatter") {
+      return scatterRoles(["butterfly", "boss"]) ? "butterflies scatter" : "bees drift";
+    }
+    return "hold";
+  }
+
+  function fireRoleShot(roles) {
+    var shooter = nearestAlienByRole(roles);
+    if (!shooter) return false;
+    fireAlienShot(shooter);
+    return true;
+  }
+
+  function launchRoleDive(roles) {
+    var diver = nearestAlienByRole(roles);
+    if (!diver) return false;
+    diver.free = true;
+    diver.loop = false;
+    diver.scatter = 0;
+    return true;
+  }
+
+  function startRoleLoop(roles) {
+    var looper = nearestAlienByRole(roles);
+    if (!looper) return false;
+    looper.loop = true;
+    looper.free = false;
+    looper.scatter = 0;
+    return true;
+  }
+
+  function scatterRoles(roles) {
+    var scattered = false;
+    state.aliens.forEach(function (alien, index) {
+      if (!alien.alive || roles.indexOf(alien.role) === -1) return;
+      alien.scatter = index % 2 === 0 ? -1 : 1;
+      alien.free = true;
+      alien.loop = false;
+      scattered = true;
+    });
+    return scattered;
+  }
+
+  function nearestAlienByRole(roles) {
+    var shipCenter = state.ship.x + state.ship.width / 2;
+    return state.aliens
+      .filter(function (alien) { return alien.alive && roles.indexOf(alien.role) !== -1; })
+      .sort(function (a, b) {
+        return Math.abs((a.x + a.width / 2) - shipCenter) - Math.abs((b.x + b.width / 2) - shipCenter);
+      })[0] || null;
   }
 
   function pilotFeatures() {
@@ -481,7 +601,7 @@
       clamp(alienCount, 0, 1),
       clamp(state.wave / 10, 0, 1),
       enemyDropCooldown <= 0 ? 1 : 0,
-      enemyShotCooldown <= 0 ? 1 : 0,
+      1,
       fleetProgress(),
       clamp(state.lives / 3, 0, 1)
     ];
@@ -527,21 +647,48 @@
   function updateAliens(dt) {
     var liveAliens = state.aliens.filter(function (alien) { return alien.alive; });
     if (!liveAliens.length) return;
-    var hitEdge = liveAliens.some(function (alien) {
+    var formationAliens = liveAliens.filter(function (alien) { return !alien.free; });
+    var hitEdge = formationAliens.some(function (alien) {
       var nextX = alien.x + state.fleetDirection * state.fleetSpeed * dt;
       return nextX < 16 || nextX + alien.width > canvas.width - 16;
     });
     if (hitEdge) {
       state.fleetDirection *= -1;
-      liveAliens.forEach(function (alien) { alien.y += state.fleetDrop; });
+      formationAliens.forEach(function (alien) { alien.y += state.fleetDrop; });
     }
     liveAliens.forEach(function (alien) {
-      alien.x += state.fleetDirection * state.fleetSpeed * dt;
       alien.wobble += dt * 5;
+      if (alien.free) {
+        updateFreeAlien(alien, dt);
+      } else {
+        alien.x += state.fleetDirection * state.fleetSpeed * dt;
+        if (alien.loop) {
+          alien.x += Math.cos(alien.wobble * 2.1) * 85 * dt;
+          alien.y += Math.sin(alien.wobble * 2.1) * 45 * dt;
+        }
+      }
       if (alien.y + alien.height >= state.ship.y) {
         loseLife();
       }
     });
+  }
+
+  function updateFreeAlien(alien, dt) {
+    var shipCenter = state.ship.x + state.ship.width / 2;
+    if (alien.scatter) {
+      alien.x += alien.scatter * (140 + state.wave * 12) * dt;
+      alien.y += (55 + state.wave * 8) * dt;
+    } else {
+      alien.x += clamp(shipCenter - (alien.x + alien.width / 2), -1, 1) * (180 + state.wave * 16) * dt;
+      alien.y += (130 + state.wave * 14) * dt;
+    }
+    if (alien.y > canvas.height - 130 || alien.x < 12 || alien.x + alien.width > canvas.width - 12) {
+      alien.free = false;
+      alien.scatter = 0;
+      alien.loop = false;
+      alien.x = clamp(alien.homeX + Math.sin(alien.wobble) * 20, 18, canvas.width - alien.width - 18);
+      alien.y = Math.min(alien.homeY + state.wave * 8, state.ship.y - 120);
+    }
   }
 
   function maybeAlienFire(dt) {
@@ -658,11 +805,32 @@
       var image = alien.type ? assets.alienB : assets.alienA;
       if (image.complete && image.naturalWidth) {
         ctx.drawImage(image, alien.x, y, alien.width, alien.height);
+        drawAlienRoleMark(alien, y);
         return;
       }
       ctx.fillStyle = alien.type ? "#ff4fc3" : "#83ff8f";
       ctx.fillRect(alien.x, y, alien.width, alien.height);
+      drawAlienRoleMark(alien, y);
     });
+  }
+
+  function drawAlienRoleMark(alien, y) {
+    var colors = {
+      bee: "#ffd166",
+      butterfly: "#ff4fc3",
+      boss: "#34f5ff"
+    };
+    ctx.save();
+    ctx.strokeStyle = colors[alien.role] || "#f5f7ff";
+    ctx.lineWidth = alien.role === "boss" ? 3 : 2;
+    ctx.beginPath();
+    ctx.arc(alien.x + alien.width / 2, y + 4, alien.role === "boss" ? 9 : 6, Math.PI, 0);
+    ctx.stroke();
+    if (alien.free || alien.loop) {
+      ctx.fillStyle = colors[alien.role] || "#f5f7ff";
+      ctx.fillRect(alien.x + alien.width / 2 - 7, y - 5, 14, 3);
+    }
+    ctx.restore();
   }
 
   function drawProjectiles() {
@@ -732,12 +900,20 @@
   resetButton.addEventListener("click", function () {
     state = createInitialState();
     running = false;
+    updateEnemyModelForMode();
     updateHud();
   });
   aiButton.addEventListener("click", function () {
     pilot = !pilot;
     updateHud();
   });
+  if (enemyModeButton) {
+    enemyModeButton.addEventListener("click", function () {
+      enemyMode = enemyMode === "progression" ? "manual" : "progression";
+      updateEnemyModelForMode();
+      updateHud();
+    });
+  }
   if (versionNodes.pilotSlider) {
     versionNodes.pilotSlider.addEventListener("input", function (event) {
       selectVersion("pilot", event.target.value);

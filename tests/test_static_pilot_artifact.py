@@ -10,8 +10,8 @@ class StaticPilotArtifactTest(unittest.TestCase):
     def test_environment_penalizes_drop_spam(self):
         env = train_static_pilot.HeadlessGalagai(seed=12, max_steps=20)
 
-        _, _, first_enemy_reward, _, first_info = env.step(3, 1)
-        _, _, second_enemy_reward, _, second_info = env.step(3, 1)
+        _, _, first_enemy_reward, _, first_info = env.step(3, 2)
+        _, _, second_enemy_reward, _, second_info = env.step(3, 2)
 
         self.assertTrue(first_info["events"].valid_drop)
         self.assertFalse(first_info["events"].invalid_drop)
@@ -37,7 +37,7 @@ class StaticPilotArtifactTest(unittest.TestCase):
             pilot_payload = json.loads((path.parent / payload["networkRef"]).read_text(encoding="utf-8"))
             enemy_payload = json.loads((path.parent / payload["enemies"]["networkRef"]).read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["version"], 6)
+        self.assertEqual(payload["version"], 7)
         self.assertEqual(payload["algorithm"], "stable-baselines3-dqn")
         self.assertEqual(payload["actions"], train_static_pilot.PILOT_ACTIONS)
         self.assertEqual(payload["features"], train_static_pilot.FEATURES)
@@ -86,6 +86,55 @@ class StaticPilotArtifactTest(unittest.TestCase):
         self.assertEqual(len(self_play["checkpoints"]["pilot"]), 2)
         self.assertEqual(len(self_play["checkpoints"]["enemies"]), 2)
         self.assertEqual(self_play["generationsPerSide"], 2)
+
+    def test_checkpoint_resume_continues_generation_target(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir) / "checkpoints"
+            train_static_pilot.train_self_play(
+                seed=51,
+                generations_per_side=1,
+                phase_timesteps=32,
+                eval_episodes=1,
+                max_steps=40,
+                dominance_threshold=1.1,
+                max_phase_iterations=1,
+                checkpoint_dir=checkpoint_dir,
+            )
+
+            _, _, resumed = train_static_pilot.train_self_play(
+                seed=51,
+                generations_per_side=2,
+                phase_timesteps=32,
+                eval_episodes=1,
+                max_steps=40,
+                dominance_threshold=1.1,
+                max_phase_iterations=1,
+                checkpoint_dir=checkpoint_dir,
+                resume=True,
+            )
+
+            state = json.loads((checkpoint_dir / "state.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(resumed["resumedFromCheckpoint"])
+        self.assertEqual(len(resumed["checkpoints"]["pilot"]), 2)
+        self.assertEqual(len(resumed["checkpoints"]["enemies"]), 2)
+        self.assertEqual(state["checkpointCounts"], {"pilot": 2, "enemies": 2})
+        self.assertEqual(len(state["checkpointFiles"]["pilot"]), 2)
+        self.assertEqual(len(state["checkpointFiles"]["enemies"]), 2)
+
+    def test_parallel_evaluation_workers_score_policy_specs(self):
+        metrics = train_static_pilot.evaluate_policy_specs(
+            seed=61,
+            pilot_spec={"kind": "heuristic-pilot"},
+            enemy_spec={"kind": "opening-enemy"},
+            episodes=2,
+            max_steps=12,
+            workers=2,
+        )
+
+        self.assertIn("pilotWinRate", metrics)
+        self.assertIn("enemyWinRate", metrics)
+        self.assertGreater(metrics["averageSteps"], 0)
 
 
 if __name__ == "__main__":

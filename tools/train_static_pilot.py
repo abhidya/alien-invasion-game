@@ -11,10 +11,12 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 import sys
-from typing import Protocol
+import tempfile
+from typing import Any, Protocol
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -26,11 +28,22 @@ import torch.nn as nn
 from gymnasium import spaces
 from stable_baselines3 import DQN
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import SubprocVecEnv
 from tqdm.auto import tqdm
 
 
 PILOT_ACTIONS = ["left", "right", "fire", "stay"]
-ENEMY_ACTIONS = ["drift_left", "drop", "drift_right", "fire"]
+ENEMY_ACTIONS = [
+    "drift_left",
+    "drift_left_fire",
+    "drop",
+    "drift_right",
+    "drift_right_fire",
+    "fire",
+    "dive",
+    "loop",
+    "scatter",
+]
 FEATURES = [
     "target_dx",
     "abs_target_dx",
@@ -59,11 +72,12 @@ FLEET_DROP = 18.0
 MAX_ALIENS_NORMALIZER = 45.0
 ACTION_DT = 0.12
 DROP_COOLDOWN_SECONDS = 1.08
-ENEMY_SHOT_COOLDOWN_SECONDS = 0.42
+ENEMY_SHOT_COOLDOWN_SECONDS = 0.0
 INVALID_DROP_PENALTY = 0.90
-MODEL_SCHEMA_VERSION = 6
+MODEL_SCHEMA_VERSION = 7
 DQN_NET_ARCH = [64, 64]
 MODEL_FILE_DIR = "galagai-models"
+DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai")
 
 
 @dataclass
@@ -127,6 +141,19 @@ class EpisodeResult:
     lives_left: int
 
 
+@dataclass(frozen=True)
+class LoadedTrainingState:
+    pilot_model: DQN | None
+    enemy_model: DQN | None
+    history: list[dict[str, object]]
+    checkpoints: dict[str, list[dict[str, object]]]
+    round_number: int
+    phase_number: int
+
+
+PolicySpec = dict[str, object]
+
+
 class Policy(Protocol):
     def act(self, observation: np.ndarray) -> int:
         ...
@@ -153,28 +180,75 @@ class HeuristicEnemyPolicy:
     def act(self, observation: np.ndarray) -> int:
         target_dx = float(observation[0])
         drop_ready = observation[7] > 0.5
-        shot_ready = observation[8] > 0.5
         fleet_y = float(observation[9])
-        if shot_ready and abs(target_dx) < 0.18:
-            return 3
+        if abs(target_dx) < 0.18:
+            return 5
         if drop_ready and fleet_y < 0.42 and abs(target_dx) > 0.34:
-            return 1
-        return 0 if target_dx > 0 else 2
+            return 2
+        return 1 if target_dx > 0 else 4
 
 
 class OpeningEnemyPolicy:
     def act(self, observation: np.ndarray) -> int:
         target_dx = float(observation[0])
-        return 0 if target_dx > 0 else 2
+        return 0 if target_dx > 0 else 3
 
 
 class SB3Policy:
-    def __init__(self, model: DQN):
+    def __init__(self, model: DQN | None):
+        if model is None:
+            raise ValueError("SB3Policy requires a loaded DQN model.")
         self.model = model
 
     def act(self, observation: np.ndarray) -> int:
         action, _ = self.model.predict(observation, deterministic=True)
         return int(action)
+
+
+class NetworkPolicy:
+    """Run an exported Q-network without keeping a live SB3 model in a worker."""
+
+    def __init__(self, network: dict[str, object]):
+        self.activation = str(network.get("activation", "relu"))
+        self.layers = list(network.get("layers", []))
+
+    def act(self, observation: np.ndarray) -> int:
+        values = np.asarray(observation, dtype=np.float32)
+        for index, layer in enumerate(self.layers):
+            weights = np.asarray(layer["weights"], dtype=np.float32)
+            biases = np.asarray(layer["biases"], dtype=np.float32)
+            values = values @ weights + biases
+            if index < len(self.layers) - 1 and self.activation == "relu":
+                values = np.maximum(values, 0.0)
+        return int(np.argmax(values)) if values.size else 0
+
+
+def pilot_policy_spec(model: DQN | None) -> PolicySpec:
+    if model is None:
+        return {"kind": "heuristic-pilot"}
+    return {"kind": "network", "role": "pilot", "network": export_network(model)}
+
+
+def enemy_policy_spec(model: DQN | None) -> PolicySpec:
+    if model is None:
+        return {"kind": "opening-enemy"}
+    return {"kind": "network", "role": "enemies", "network": export_network(model)}
+
+
+def policy_from_spec(spec: PolicySpec) -> Policy:
+    kind = str(spec["kind"])
+    if kind == "network":
+        network = spec.get("network")
+        if not isinstance(network, dict):
+            raise ValueError("Network policy spec is missing its exported network.")
+        return NetworkPolicy(network)
+    if kind == "heuristic-pilot":
+        return HeuristicPilotPolicy()
+    if kind == "heuristic-enemy":
+        return HeuristicEnemyPolicy()
+    if kind == "opening-enemy":
+        return OpeningEnemyPolicy()
+    raise ValueError(f"Unknown policy spec kind {kind}.")
 
 
 class HeadlessGalagai:
@@ -241,7 +315,7 @@ class HeadlessGalagai:
                 self._clamp01(len(live_aliens) / MAX_ALIENS_NORMALIZER),
                 self._clamp01(self.wave / 10.0),
                 1.0 if self.enemy_drop_cooldown <= 0 else 0.0,
-                1.0 if self.enemy_shot_cooldown <= 0 else 0.0,
+                1.0,
                 fleet_y,
                 self._clamp01(self.lives / 3.0),
             ],
@@ -286,6 +360,13 @@ class HeadlessGalagai:
         if enemy_action == 0:
             self.fleet_direction = -1
         elif enemy_action == 1:
+            self.fleet_direction = -1
+            enemy_fired = self.fire_enemy_shot()
+            if enemy_fired:
+                self.enemy_fires += 1
+            else:
+                invalid_fire = True
+        elif enemy_action == 2:
             self.drop_attempts += 1
             if self.enemy_drop_cooldown <= 0:
                 self.drop_fleet()
@@ -294,18 +375,38 @@ class HeadlessGalagai:
             else:
                 self.invalid_drops += 1
                 invalid_drop = True
-        elif enemy_action == 2:
-            self.fleet_direction = 1
         elif enemy_action == 3:
-            if self.enemy_shot_cooldown <= 0:
-                enemy_fired = self.fire_enemy_shot()
-                if enemy_fired:
-                    self.enemy_shot_cooldown = ENEMY_SHOT_COOLDOWN_SECONDS
-                    self.enemy_fires += 1
-                else:
-                    invalid_fire = True
+            self.fleet_direction = 1
+        elif enemy_action == 4:
+            self.fleet_direction = 1
+            enemy_fired = self.fire_enemy_shot()
+            if enemy_fired:
+                self.enemy_fires += 1
             else:
                 invalid_fire = True
+        elif enemy_action == 5:
+            enemy_fired = self.fire_enemy_shot()
+            if enemy_fired:
+                self.enemy_fires += 1
+            else:
+                invalid_fire = True
+        elif enemy_action == 6:
+            self.fleet_direction = -1 if target_dx < 0 else 1
+            self.dive_fleet()
+            enemy_fired = self.fire_enemy_shot()
+            if enemy_fired:
+                self.enemy_fires += 1
+            else:
+                invalid_fire = True
+        elif enemy_action == 7:
+            self.fleet_direction *= -1
+            enemy_fired = self.fire_enemy_shot()
+            if enemy_fired:
+                self.enemy_fires += 1
+            else:
+                invalid_fire = True
+        elif enemy_action == 8:
+            self.fleet_direction = 1 if target_dx < 0 else -1
         else:
             raise ValueError(f"Unknown enemy action {enemy_action}.")
 
@@ -383,6 +484,14 @@ class HeadlessGalagai:
         for alien in self.aliens:
             if alien.alive:
                 alien.y += FLEET_DROP * 0.65
+
+    def dive_fleet(self) -> None:
+        live_aliens = [alien for alien in self.aliens if alien.alive]
+        if not live_aliens:
+            return
+        diver = min(live_aliens, key=lambda alien: abs(alien.center_x - self.ship.center_x))
+        diver.x += self._clamp(self.ship.center_x - diver.center_x, -28.0, 28.0)
+        diver.y += FLEET_DROP * 0.42
 
     def update_projectiles(self) -> None:
         for bullet in self.bullets:
@@ -504,12 +613,22 @@ class HeadlessGalagai:
     def is_enemy_tactical_action(action: int, target_dx: float, fleet_y: float) -> bool:
         if action == 0:
             return target_dx > 0.06
-        if action == 2:
-            return target_dx < -0.06
-        if action == 3:
-            return abs(target_dx) < 0.18
         if action == 1:
+            return target_dx > 0.06 or abs(target_dx) < 0.18
+        if action == 2:
             return fleet_y < 0.42 and abs(target_dx) > 0.34
+        if action == 3:
+            return target_dx < -0.06
+        if action == 4:
+            return target_dx < -0.06 or abs(target_dx) < 0.18
+        if action == 5:
+            return abs(target_dx) < 0.18
+        if action == 6:
+            return abs(target_dx) < 0.32
+        if action == 7:
+            return True
+        if action == 8:
+            return abs(target_dx) < 0.12
         return False
 
     @staticmethod
@@ -550,7 +669,7 @@ class PilotTrainingEnv(gym.Env):
         next_observation, pilot_reward, _, done, info = self.game.step(int(action), enemy_action)
         terminated = done and str(info.get("winner", "none")) in {"pilot", "enemies"}
         truncated = done and not terminated
-        return next_observation, pilot_reward, terminated, truncated, info
+        return next_observation, pilot_reward, terminated, truncated, serializable_info(info)
 
 
 class EnemyTrainingEnv(gym.Env):
@@ -574,13 +693,80 @@ class EnemyTrainingEnv(gym.Env):
         next_observation, _, enemy_reward, done, info = self.game.step(pilot_action, int(action))
         terminated = done and str(info.get("winner", "none")) in {"pilot", "enemies"}
         truncated = done and not terminated
-        return next_observation, enemy_reward, terminated, truncated, info
+        return next_observation, enemy_reward, terminated, truncated, serializable_info(info)
 
 
-def make_dqn(env: gym.Env, seed: int, learning_rate: float) -> DQN:
+def serializable_info(info: dict[str, object]) -> dict[str, object]:
+    sanitized = dict(info)
+    events = sanitized.get("events")
+    if isinstance(events, StepEvents):
+        sanitized["events"] = {
+            "scoreGain": events.score_gain,
+            "aliensDestroyed": events.aliens_destroyed,
+            "lifeLoss": events.life_loss,
+            "waveCleared": events.wave_cleared,
+            "invalidDrop": events.invalid_drop,
+            "invalidFire": events.invalid_fire,
+            "validDrop": events.valid_drop,
+            "enemyFired": events.enemy_fired,
+            "pilotFired": events.pilot_fired,
+            "pilotMissed": events.pilot_missed,
+            "pilotAlignedAction": events.pilot_aligned_action,
+            "pilotAlignedFire": events.pilot_aligned_fire,
+            "pilotBadFire": events.pilot_bad_fire,
+            "enemyTacticalAction": events.enemy_tactical_action,
+        }
+    return sanitized
+
+
+def make_role_env(role: str, opponent_spec: PolicySpec, seed: int, max_steps: int) -> gym.Env:
+    opponent = policy_from_spec(opponent_spec)
+    if role == "pilot":
+        return Monitor(PilotTrainingEnv(opponent, seed=seed, max_steps=max_steps))
+    if role == "enemies":
+        return Monitor(EnemyTrainingEnv(opponent, seed=seed, max_steps=max_steps))
+    raise ValueError(f"Unknown training role {role}.")
+
+
+def make_training_env(
+    role: str,
+    opponent_spec: PolicySpec,
+    *,
+    seed: int,
+    max_steps: int,
+    workers: int,
+) -> Any:
+    worker_count = max(1, int(workers))
+    if worker_count == 1:
+        return make_role_env(role, opponent_spec, seed=seed, max_steps=max_steps)
+
+    def make_env(worker_index: int):
+        def _init() -> gym.Env:
+            return make_role_env(
+                role,
+                opponent_spec,
+                seed=seed + worker_index * 10_000,
+                max_steps=max_steps,
+            )
+
+        return _init
+
+    return SubprocVecEnv([make_env(index) for index in range(worker_count)], start_method="spawn")
+
+
+def close_training_env(env: Any) -> None:
+    close = getattr(env, "close", None)
+    if callable(close):
+        try:
+            close()
+        except (BrokenPipeError, EOFError):
+            pass
+
+
+def make_dqn(env: Any, seed: int, learning_rate: float) -> DQN:
     return DQN(
         "MlpPolicy",
-        Monitor(env),
+        env,
         learning_rate=learning_rate,
         buffer_size=50_000,
         learning_starts=250,
@@ -599,7 +785,7 @@ def make_dqn(env: gym.Env, seed: int, learning_rate: float) -> DQN:
 
 
 class TrainingProgress:
-    def __init__(self, enabled: bool, total: int):
+    def __init__(self, enabled: bool, total: int, completed: int = 0):
         self.bar = tqdm(
             total=total,
             desc="self-play generations",
@@ -607,6 +793,8 @@ class TrainingProgress:
             dynamic_ncols=True,
             disable=not enabled,
         )
+        if completed and not self.bar.disable:
+            self.bar.update(min(completed, total))
 
     def update(self, metrics: dict[str, object], pilot_count: int, enemy_count: int) -> None:
         if self.bar.disable:
@@ -640,6 +828,162 @@ def progress_total(cycles: int, max_phase_iterations: int, generations_per_side:
     return cycles * 2 * max_phase_iterations
 
 
+class TrainingCheckpointStore:
+    def __init__(self, directory: Path):
+        self.directory = directory
+        self.exports_dir = directory / "exports"
+        self.state_path = directory / "state.json"
+
+    def has_state(self) -> bool:
+        return self.state_path.exists()
+
+    def load(self) -> LoadedTrainingState:
+        if not self.state_path.exists():
+            raise RuntimeError(f"No training checkpoint found at {self.state_path}.")
+
+        state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self._validate_state(state)
+        history = list(state.get("rounds", []))
+        checkpoint_files = state.get("checkpointFiles", {})
+        checkpoints = {
+            "pilot": self._load_exported_entries("pilot", checkpoint_files),
+            "enemies": self._load_exported_entries("enemies", checkpoint_files),
+        }
+        return LoadedTrainingState(
+            pilot_model=self._load_role_model("pilot") if checkpoints["pilot"] else None,
+            enemy_model=self._load_role_model("enemies") if checkpoints["enemies"] else None,
+            history=history,
+            checkpoints=checkpoints,
+            round_number=int(state.get("roundNumber", len(history))),
+            phase_number=int(state.get("phaseNumber", self._latest_phase(history))),
+        )
+
+    def save(
+        self,
+        *,
+        pilot_model: DQN | None,
+        enemy_model: DQN | None,
+        history: list[dict[str, object]],
+        checkpoints: dict[str, list[dict[str, object]]],
+        round_number: int,
+        phase_number: int,
+        config: dict[str, object],
+    ) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.exports_dir.mkdir(parents=True, exist_ok=True)
+        if pilot_model is not None:
+            self._save_role_model("pilot", pilot_model)
+        if enemy_model is not None:
+            self._save_role_model("enemies", enemy_model)
+
+        checkpoint_files: dict[str, list[str]] = {"pilot": [], "enemies": []}
+        for role in ("pilot", "enemies"):
+            entries = checkpoints.get(role, [])
+            for entry in entries:
+                filename = checkpoint_filename(role, int(entry["id"]))
+                entry_path = self.exports_dir / filename
+                checkpoint_files[role].append(filename)
+                if not entry_path.exists() or int(entry["id"]) == len(entries):
+                    self._write_json_atomic(entry_path, entry)
+
+        state = {
+            "schemaVersion": MODEL_SCHEMA_VERSION,
+            "algorithm": "stable-baselines3-dqn",
+            "actions": {"pilot": PILOT_ACTIONS, "enemies": ENEMY_ACTIONS},
+            "features": FEATURES,
+            "netArch": DQN_NET_ARCH,
+            "roundNumber": round_number,
+            "phaseNumber": phase_number,
+            "checkpointCounts": {
+                "pilot": len(checkpoints.get("pilot", [])),
+                "enemies": len(checkpoints.get("enemies", [])),
+            },
+            "checkpointFiles": checkpoint_files,
+            "rounds": history,
+            "config": config,
+        }
+        self._write_json_atomic(self.state_path, state)
+
+    def _validate_state(self, state: dict[str, object]) -> None:
+        if int(state.get("schemaVersion", -1)) != MODEL_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Checkpoint schema {state.get('schemaVersion')} does not match current schema {MODEL_SCHEMA_VERSION}."
+            )
+        actions = state.get("actions", {})
+        if not isinstance(actions, dict) or actions.get("pilot") != PILOT_ACTIONS or actions.get("enemies") != ENEMY_ACTIONS:
+            raise RuntimeError("Checkpoint action space does not match the current trainer.")
+        if state.get("features") != FEATURES:
+            raise RuntimeError("Checkpoint feature vector does not match the current trainer.")
+        if state.get("netArch") != DQN_NET_ARCH:
+            raise RuntimeError("Checkpoint DQN network architecture does not match the current trainer.")
+
+    def _load_exported_entries(self, role: str, checkpoint_files: object) -> list[dict[str, object]]:
+        files: list[str] = []
+        if isinstance(checkpoint_files, dict):
+            role_files = checkpoint_files.get(role, [])
+            if isinstance(role_files, list):
+                files = [str(filename) for filename in role_files]
+        entries = []
+        for filename in files:
+            path = self.exports_dir / filename
+            if not path.exists():
+                raise RuntimeError(f"Checkpoint export is missing: {path}")
+            entries.append(json.loads(path.read_text(encoding="utf-8")))
+        return entries
+
+    def _load_role_model(self, role: str) -> DQN:
+        model_path = self.directory / f"{role}_latest.zip"
+        if not model_path.exists():
+            raise RuntimeError(f"{role} model checkpoint is missing: {model_path}")
+        model = DQN.load(model_path)
+        replay_path = self.directory / f"{role}_replay.pkl"
+        if replay_path.exists():
+            model.load_replay_buffer(replay_path)
+        return model
+
+    def _save_role_model(self, role: str, model: DQN) -> None:
+        self._save_model_atomic(model, self.directory / f"{role}_latest.zip")
+        self._save_replay_buffer_atomic(model, self.directory / f"{role}_replay.pkl")
+
+    @staticmethod
+    def _save_model_atomic(model: DQN, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f".{path.stem}.tmp{path.suffix}")
+        if tmp_path.exists():
+            tmp_path.unlink()
+        model.save(tmp_path)
+        tmp_path.replace(path)
+
+    @staticmethod
+    def _save_replay_buffer_atomic(model: DQN, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f".{path.stem}.tmp{path.suffix}")
+        if tmp_path.exists():
+            tmp_path.unlink()
+        model.save_replay_buffer(tmp_path)
+        tmp_path.replace(path)
+
+    @staticmethod
+    def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+                json.dump(payload, tmp, separators=(",", ":"))
+                tmp.write("\n")
+                tmp_path = Path(tmp.name)
+            tmp_path.replace(path)
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink()
+
+    @staticmethod
+    def _latest_phase(history: list[dict[str, object]]) -> int:
+        if not history:
+            return 0
+        return max(int(round_info.get("phase", 0)) for round_info in history)
+
+
 def train_self_play(
     *,
     seed: int,
@@ -653,9 +997,15 @@ def train_self_play(
     rounds: int | None = None,
     timesteps_per_round: int | None = None,
     progress: bool = False,
+    checkpoint_dir: Path | None = None,
+    resume: bool = False,
+    train_workers: int = 1,
+    eval_workers: int = 1,
 ) -> tuple[DQN, DQN, dict[str, object]]:
     if timesteps_per_round is not None:
         phase_timesteps = timesteps_per_round
+    train_workers = max(1, int(train_workers))
+    eval_workers = max(1, int(eval_workers))
     if generations_per_side is not None:
         phase_roles = []
     elif rounds is not None:
@@ -669,33 +1019,78 @@ def train_self_play(
     history: list[dict[str, object]] = []
     checkpoints: dict[str, list[dict[str, object]]] = {"pilot": [], "enemies": []}
     round_number = 0
+    phase_number_offset = 0
+    checkpoint_store = TrainingCheckpointStore(checkpoint_dir) if checkpoint_dir is not None else None
+    if resume:
+        if checkpoint_store is None:
+            raise RuntimeError("--resume requires checkpoint_dir.")
+        loaded = checkpoint_store.load()
+        pilot_model = loaded.pilot_model
+        enemy_model = loaded.enemy_model
+        history = loaded.history
+        checkpoints = loaded.checkpoints
+        round_number = loaded.round_number
+        phase_number_offset = loaded.phase_number
+
+    completed_generations = len(history)
     progress_tracker = TrainingProgress(
         progress,
         progress_total(cycles, max_phase_iterations, generations_per_side, rounds),
+        completed=completed_generations,
     )
+    checkpoint_config = {
+        "seed": seed,
+        "cycles": cycles,
+        "phaseTimesteps": phase_timesteps,
+        "evalEpisodes": eval_episodes,
+        "maxSteps": max_steps,
+        "dominanceThreshold": dominance_threshold,
+        "maxPhaseIterations": max_phase_iterations,
+        "generationsPerSide": generations_per_side,
+        "rounds": rounds,
+        "trainWorkers": train_workers,
+        "evalWorkers": eval_workers,
+    }
 
     def run_generation(role: str, phase_number: int, phase_iteration: int) -> bool:
         nonlocal pilot_model, enemy_model, round_number
 
         round_number += 1
         phase_seed = seed + phase_number * 1000 + phase_iteration * 97
+        env = None
         if role == "pilot":
-            enemy_policy: Policy = SB3Policy(enemy_model) if enemy_model is not None else OpeningEnemyPolicy()
-            env = PilotTrainingEnv(enemy_policy, seed=phase_seed, max_steps=max_steps)
-            if pilot_model is None:
-                pilot_model = make_dqn(env, seed=seed, learning_rate=8e-4)
-            else:
-                pilot_model.set_env(Monitor(env))
-            pilot_model.learn(total_timesteps=phase_timesteps, reset_num_timesteps=False, progress_bar=False)
+            env = make_training_env(
+                "pilot",
+                enemy_policy_spec(enemy_model),
+                seed=phase_seed,
+                max_steps=max_steps,
+                workers=train_workers,
+            )
+            try:
+                if pilot_model is None:
+                    pilot_model = make_dqn(env, seed=seed, learning_rate=8e-4)
+                else:
+                    pilot_model.set_env(env)
+                pilot_model.learn(total_timesteps=phase_timesteps, reset_num_timesteps=False, progress_bar=False)
+            finally:
+                close_training_env(env)
             trained = "pilot"
         else:
-            pilot_policy: Policy = SB3Policy(pilot_model) if pilot_model is not None else HeuristicPilotPolicy()
-            env = EnemyTrainingEnv(pilot_policy, seed=phase_seed, max_steps=max_steps)
-            if enemy_model is None:
-                enemy_model = make_dqn(env, seed=seed + 1, learning_rate=8e-4)
-            else:
-                enemy_model.set_env(Monitor(env))
-            enemy_model.learn(total_timesteps=phase_timesteps, reset_num_timesteps=False, progress_bar=False)
+            env = make_training_env(
+                "enemies",
+                pilot_policy_spec(pilot_model),
+                seed=phase_seed,
+                max_steps=max_steps,
+                workers=train_workers,
+            )
+            try:
+                if enemy_model is None:
+                    enemy_model = make_dqn(env, seed=seed + 1, learning_rate=8e-4)
+                else:
+                    enemy_model.set_env(env)
+                enemy_model.learn(total_timesteps=phase_timesteps, reset_num_timesteps=False, progress_bar=False)
+            finally:
+                close_training_env(env)
             trained = "enemies"
 
         metrics = evaluate_current_matchup(
@@ -704,6 +1099,7 @@ def train_self_play(
             enemy_model=enemy_model,
             eval_episodes=eval_episodes,
             max_steps=max_steps,
+            eval_workers=eval_workers,
         )
         dominance_metric = "pilotWinRate" if trained == "pilot" else "enemyWinRate"
         dominance_reached = float(metrics[dominance_metric]) >= dominance_threshold
@@ -738,13 +1134,23 @@ def train_self_play(
                     metrics=round_metrics,
                 )
             )
+        if checkpoint_store is not None:
+            checkpoint_store.save(
+                pilot_model=pilot_model,
+                enemy_model=enemy_model,
+                history=history,
+                checkpoints=checkpoints,
+                round_number=round_number,
+                phase_number=phase_number,
+                config=checkpoint_config,
+            )
         progress_tracker.update(round_metrics, len(checkpoints["pilot"]), len(checkpoints["enemies"]))
         return dominance_reached
 
     try:
         if generations_per_side is not None:
-            phase_number = 0
-            role = "pilot"
+            phase_number = phase_number_offset
+            role = "pilot" if len(checkpoints["pilot"]) <= len(checkpoints["enemies"]) else "enemies"
             while len(checkpoints["pilot"]) < generations_per_side or len(checkpoints["enemies"]) < generations_per_side:
                 if len(checkpoints[role]) >= generations_per_side:
                     role = "enemies" if role == "pilot" else "pilot"
@@ -758,9 +1164,10 @@ def train_self_play(
                         break
                 role = "enemies" if role == "pilot" else "pilot"
         else:
-            for phase_number, role in enumerate(phase_roles, start=1):
+            remaining_phase_roles = phase_roles[round_number:] if rounds is not None else phase_roles[phase_number_offset:]
+            for phase_index, role in enumerate(remaining_phase_roles, start=phase_number_offset + 1):
                 for phase_iteration in range(1, max_phase_iterations + 1):
-                    dominance_reached = run_generation(role, phase_number, phase_iteration)
+                    dominance_reached = run_generation(role, phase_index, phase_iteration)
                     if dominance_reached:
                         break
     finally:
@@ -780,6 +1187,10 @@ def train_self_play(
         "maxPhaseIterations": max_phase_iterations,
         "dominanceThreshold": dominance_threshold,
         "netArch": DQN_NET_ARCH,
+        "checkpointDir": str(checkpoint_dir) if checkpoint_dir is not None else None,
+        "resumedFromCheckpoint": resume,
+        "trainWorkers": train_workers,
+        "evalWorkers": eval_workers,
         "environment": {
             "name": "HeadlessGalagai",
             "openingEnemyPolicy": "drift-only bootstrap until the first learned enemy checkpoint exists",
@@ -798,10 +1209,16 @@ def evaluate_current_matchup(
     enemy_model: DQN | None,
     eval_episodes: int,
     max_steps: int,
+    eval_workers: int = 1,
 ) -> dict[str, object]:
-    pilot_policy: Policy = SB3Policy(pilot_model) if pilot_model is not None else HeuristicPilotPolicy()
-    enemy_policy: Policy = SB3Policy(enemy_model) if enemy_model is not None else OpeningEnemyPolicy()
-    return evaluate(seed, pilot_policy, enemy_policy, eval_episodes, max_steps)
+    return evaluate_policy_specs(
+        seed=seed,
+        pilot_spec=pilot_policy_spec(pilot_model),
+        enemy_spec=enemy_policy_spec(enemy_model),
+        episodes=eval_episodes,
+        max_steps=max_steps,
+        workers=eval_workers,
+    )
 
 
 def checkpoint_entry(role: str, model: DQN, version_id: int, metrics: dict[str, object]) -> dict[str, object]:
@@ -846,32 +1263,65 @@ def manifest_checkpoint(entry: dict[str, object], url: str) -> dict[str, object]
     } | {"url": url}
 
 
+def run_episode(seed: int, pilot_policy: Policy, enemy_policy: Policy, max_steps: int) -> EpisodeResult:
+    game = HeadlessGalagai(seed=seed, max_steps=max_steps)
+    observation = game.reset(seed=seed)
+    done = False
+    info: dict[str, object] = {}
+    while not done:
+        pilot_action = pilot_policy.act(observation)
+        enemy_action = enemy_policy.act(observation)
+        observation, _, _, done, info = game.step(pilot_action, enemy_action)
+    drop_attempts = max(1, int(info.get("dropAttempts", 0)))
+    return EpisodeResult(
+        winner=str(info.get("winner", "none")),
+        score=int(info.get("score", 0)),
+        wave=int(info.get("wave", 1)),
+        steps=game.steps,
+        enemy_drop_rate=float(info.get("dropAttempts", 0)) / max(1, game.steps),
+        invalid_drop_rate=float(info.get("invalidDrops", 0)) / drop_attempts,
+        enemy_fire_rate=float(info.get("enemyFires", 0)) / max(1, game.steps),
+        pilot_fire_rate=float(info.get("pilotFires", 0)) / max(1, game.steps),
+        lives_left=int(info.get("lives", 0)),
+    )
+
+
+def run_episode_from_specs(args: tuple[int, PolicySpec, PolicySpec, int]) -> EpisodeResult:
+    seed, pilot_spec, enemy_spec, max_steps = args
+    return run_episode(seed, policy_from_spec(pilot_spec), policy_from_spec(enemy_spec), max_steps)
+
+
+def evaluate_policy_specs(
+    *,
+    seed: int,
+    pilot_spec: PolicySpec,
+    enemy_spec: PolicySpec,
+    episodes: int,
+    max_steps: int,
+    workers: int,
+) -> dict[str, object]:
+    if workers > 1 and episodes > 1:
+        tasks = [(seed + episode, pilot_spec, enemy_spec, max_steps) for episode in range(episodes)]
+        with ProcessPoolExecutor(max_workers=min(workers, episodes)) as executor:
+            results = list(executor.map(run_episode_from_specs, tasks))
+    else:
+        pilot_policy = policy_from_spec(pilot_spec)
+        enemy_policy = policy_from_spec(enemy_spec)
+        results = [
+            run_episode(seed + episode, pilot_policy, enemy_policy, max_steps)
+            for episode in range(episodes)
+        ]
+    return summarize_episode_results(results, episodes)
+
+
 def evaluate(seed: int, pilot_policy: Policy, enemy_policy: Policy, episodes: int, max_steps: int) -> dict[str, object]:
     results: list[EpisodeResult] = []
     for episode in range(episodes):
-        game = HeadlessGalagai(seed=seed + episode, max_steps=max_steps)
-        observation = game.reset(seed=seed + episode)
-        done = False
-        info: dict[str, object] = {}
-        while not done:
-            pilot_action = pilot_policy.act(observation)
-            enemy_action = enemy_policy.act(observation)
-            observation, _, _, done, info = game.step(pilot_action, enemy_action)
-        drop_attempts = max(1, int(info.get("dropAttempts", 0)))
-        results.append(
-            EpisodeResult(
-                winner=str(info.get("winner", "none")),
-                score=int(info.get("score", 0)),
-                wave=int(info.get("wave", 1)),
-                steps=game.steps,
-                enemy_drop_rate=float(info.get("dropAttempts", 0)) / max(1, game.steps),
-                invalid_drop_rate=float(info.get("invalidDrops", 0)) / drop_attempts,
-                enemy_fire_rate=float(info.get("enemyFires", 0)) / max(1, game.steps),
-                pilot_fire_rate=float(info.get("pilotFires", 0)) / max(1, game.steps),
-                lives_left=int(info.get("lives", 0)),
-            )
-        )
+        results.append(run_episode(seed + episode, pilot_policy, enemy_policy, max_steps))
+    return summarize_episode_results(results, episodes)
 
+
+def summarize_episode_results(results: list[EpisodeResult], episodes: int) -> dict[str, object]:
     pilot_wins = sum(1 for result in results if result.winner == "pilot")
     enemy_wins = sum(1 for result in results if result.winner == "enemies")
     return {
@@ -998,6 +1448,11 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20260607)
     parser.add_argument("--out", type=Path, default=Path("js/galagai-model.json"))
     parser.add_argument("--no-progress", action="store_true", help="Disable tqdm progress output.")
+    parser.add_argument("--checkpoint-dir", type=Path, default=DEFAULT_CHECKPOINT_DIR)
+    parser.add_argument("--resume", action="store_true", help="Resume from --checkpoint-dir instead of starting fresh.")
+    parser.add_argument("--no-checkpoints", action="store_true", help="Disable per-generation trainer checkpoints.")
+    parser.add_argument("--train-workers", type=int, default=1, help="Parallel headless envs for SB3 rollout collection.")
+    parser.add_argument("--eval-workers", type=int, default=1, help="Parallel processes for dominance evaluation episodes.")
     args = parser.parse_args()
 
     pilot_model, enemy_model, self_play = train_self_play(
@@ -1012,6 +1467,10 @@ def main() -> None:
         rounds=args.rounds,
         timesteps_per_round=args.timesteps_per_round,
         progress=not args.no_progress,
+        checkpoint_dir=None if args.no_checkpoints else args.checkpoint_dir,
+        resume=args.resume,
+        train_workers=args.train_workers,
+        eval_workers=args.eval_workers,
     )
     write_model(args.out, pilot_model, enemy_model, self_play)
     summary = artifact_summary(args.out)
@@ -1026,6 +1485,10 @@ def main() -> None:
                 "dominanceThreshold": self_play["dominanceThreshold"],
                 "maxPhaseIterations": self_play["maxPhaseIterations"],
                 "netArch": self_play["netArch"],
+                "checkpointDir": self_play["checkpointDir"],
+                "resumedFromCheckpoint": self_play["resumedFromCheckpoint"],
+                "trainWorkers": self_play["trainWorkers"],
+                "evalWorkers": self_play["evalWorkers"],
                 "roundsCompleted": len(self_play["rounds"]),
                 "checkpointCounts": {
                     "pilot": len(self_play["checkpoints"]["pilot"]),
