@@ -39,6 +39,7 @@
   var fireCooldown = 0;
   var enemyThinkCooldown = 0;
   var enemyShotCooldown = 0;
+  var enemyDropCooldown = 0;
   var shake = 0;
 
   var state = createInitialState();
@@ -59,9 +60,9 @@
         return response.json();
       })
       .then(function (model) {
-        if (!model || !Array.isArray(model.weights) || !Array.isArray(model.actions)) return;
+        if (!isUsableModel(model)) return;
         pilotModel = model;
-        enemyModel = model.enemies && Array.isArray(model.enemies.weights) && Array.isArray(model.enemies.actions)
+        enemyModel = isUsableModel(model.enemies)
           ? model.enemies
           : null;
         updateHud();
@@ -71,6 +72,14 @@
         enemyModel = null;
         updateHud();
       });
+  }
+
+  function isUsableModel(model) {
+    return Boolean(
+      model &&
+      Array.isArray(model.actions) &&
+      (Array.isArray(model.weights) || (model.network && Array.isArray(model.network.layers)))
+    );
   }
 
   function createInitialState() {
@@ -161,8 +170,8 @@
     checkpointNodes.selfPlayRound.textContent = latest ? latest.round : "--";
     checkpointNodes.trainedSide.textContent = latest ? latest.trained : "--";
     checkpointNodes.enemyAction.textContent = enemyModel ? enemyAction : "--";
-    checkpointNodes.pilotWinRate.textContent = latest ? percent(latest.pilotWinRate) : "--";
-    checkpointNodes.enemyPressure.textContent = latest ? percent(latest.enemyPressure) : "--";
+    checkpointNodes.pilotWinRate.textContent = latest ? percent(latest.enemyWinRate) : "--";
+    checkpointNodes.enemyPressure.textContent = latest ? percent(latest.enemyDropRate) : "--";
   }
 
   function percent(value) {
@@ -181,6 +190,7 @@
     fireCooldown = Math.max(0, fireCooldown - dt);
     enemyThinkCooldown = Math.max(0, enemyThinkCooldown - dt);
     enemyShotCooldown = Math.max(0, enemyShotCooldown - dt);
+    enemyDropCooldown = Math.max(0, enemyDropCooldown - dt);
     shake = Math.max(0, shake - dt);
     if (pilot) runPilot(dt);
     updateShip(dt);
@@ -223,19 +233,40 @@
   function predictModelAction(model, fallback) {
     if (!model) return fallback;
     var features = pilotFeatures();
+    var scores = model.network ? evaluateNetwork(model.network, features) : null;
     var bestAction = fallback;
     var bestScoreForAction = -Infinity;
     model.actions.forEach(function (action, actionIndex) {
-      var score = 0;
-      features.forEach(function (value, featureIndex) {
-        score += value * Number(model.weights[featureIndex][actionIndex] || 0);
-      });
+      var score = scores
+        ? Number(scores[actionIndex] || 0)
+        : features.reduce(function (total, value, featureIndex) {
+          return total + value * Number(model.weights[featureIndex][actionIndex] || 0);
+        }, 0);
       if (score > bestScoreForAction) {
         bestScoreForAction = score;
         bestAction = action;
       }
     });
     return bestAction;
+  }
+
+  function evaluateNetwork(network, features) {
+    var values = features.slice();
+    network.layers.forEach(function (layer, layerIndex) {
+      var next = layer.biases.map(function (bias, outputIndex) {
+        var total = Number(bias || 0);
+        values.forEach(function (value, inputIndex) {
+          var row = layer.weights[inputIndex] || [];
+          total += value * Number(row[outputIndex] || 0);
+        });
+        if (layerIndex < network.layers.length - 1 && network.activation === "relu") {
+          return Math.max(0, total);
+        }
+        return total;
+      });
+      values = next;
+    });
+    return values;
   }
 
   function runEnemyModel() {
@@ -249,11 +280,16 @@
       state.fleetDirection = -1;
     } else if (action === "drift_right") {
       state.fleetDirection = 1;
+    } else if (action === "drop" && enemyDropCooldown <= 0) {
+      liveAliens.forEach(function (alien) { alien.y += state.fleetDrop * 0.65; });
+      enemyDropCooldown = 1.08;
     } else if (action === "drop") {
-      liveAliens.forEach(function (alien) { alien.y += state.fleetDrop * 0.35; });
+      enemyAction = "drop-cooldown";
     } else if (action === "fire" && enemyShotCooldown <= 0) {
       fireAlienShot(nearestThreat() || liveAliens[Math.floor(Math.random() * liveAliens.length)]);
       enemyShotCooldown = 0.42;
+    } else if (action === "fire") {
+      enemyAction = "fire-cooldown";
     }
     enemyThinkCooldown = Math.max(0.12, 0.24 - state.wave * 0.008);
     updateHud();
@@ -285,8 +321,18 @@
       threatY,
       fireCooldown <= 0 ? 1 : 0,
       clamp(alienCount, 0, 1),
-      clamp(state.wave / 10, 0, 1)
+      clamp(state.wave / 10, 0, 1),
+      enemyDropCooldown <= 0 ? 1 : 0,
+      enemyShotCooldown <= 0 ? 1 : 0,
+      fleetProgress(),
+      clamp(state.lives / 3, 0, 1)
     ];
+  }
+
+  function fleetProgress() {
+    var liveAliens = state.aliens.filter(function (alien) { return alien.alive; });
+    if (!liveAliens.length) return 0;
+    return clamp(Math.max.apply(null, liveAliens.map(function (alien) { return alien.y; })) / canvas.height, 0, 1);
   }
 
   function nearestThreat() {
@@ -481,7 +527,7 @@
     ctx.fillText(message, canvas.width / 2, canvas.height / 2 - 18);
     ctx.font = "700 22px system-ui, sans-serif";
     ctx.fillStyle = "#aeb7da";
-    ctx.fillText("Start the game or toggle the heuristic pilot", canvas.width / 2, canvas.height / 2 + 26);
+    ctx.fillText("Start the game or toggle the trained pilot", canvas.width / 2, canvas.height / 2 + 26);
   }
 
   function intersects(a, b) {
