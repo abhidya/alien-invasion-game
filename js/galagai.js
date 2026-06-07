@@ -10,6 +10,16 @@
   var startButton = document.getElementById("start-button");
   var aiButton = document.getElementById("ai-button");
   var resetButton = document.getElementById("reset-button");
+  var checkpointNodes = {
+    modelName: document.getElementById("model-name"),
+    enemyModelName: document.getElementById("enemy-model-name"),
+    evalAccuracy: document.getElementById("eval-accuracy"),
+    selfPlayRound: document.getElementById("self-play-round"),
+    trainedSide: document.getElementById("trained-side"),
+    enemyAction: document.getElementById("enemy-action"),
+    pilotWinRate: document.getElementById("pilot-win-rate"),
+    enemyPressure: document.getElementById("enemy-pressure")
+  };
 
   var assets = {
     ship: loadImage("alien_invasion/images/ship1.png"),
@@ -23,8 +33,12 @@
   var running = false;
   var pilot = false;
   var pilotModel = null;
+  var enemyModel = null;
+  var enemyAction = "hold";
   var lastTime = 0;
   var fireCooldown = 0;
+  var enemyThinkCooldown = 0;
+  var enemyShotCooldown = 0;
   var shake = 0;
 
   var state = createInitialState();
@@ -47,10 +61,14 @@
       .then(function (model) {
         if (!model || !Array.isArray(model.weights) || !Array.isArray(model.actions)) return;
         pilotModel = model;
+        enemyModel = model.enemies && Array.isArray(model.enemies.weights) && Array.isArray(model.enemies.actions)
+          ? model.enemies
+          : null;
         updateHud();
       })
       .catch(function () {
         pilotModel = null;
+        enemyModel = null;
         updateHud();
       });
   }
@@ -129,6 +147,26 @@
       aiButton.textContent = pilotModel ? "Pilot: trained" : "Pilot: heuristic";
     }
     aiButton.setAttribute("aria-pressed", pilot ? "true" : "false");
+    updateCheckpointPanel();
+  }
+
+  function updateCheckpointPanel() {
+    var metrics = pilotModel && pilotModel.metrics ? pilotModel.metrics : null;
+    var selfPlay = metrics && metrics.selfPlay ? metrics.selfPlay : null;
+    var latest = selfPlay && selfPlay.latest ? selfPlay.latest : null;
+
+    checkpointNodes.modelName.textContent = pilotModel ? pilotModel.model : "heuristic";
+    checkpointNodes.enemyModelName.textContent = enemyModel ? enemyModel.model : "scripted";
+    checkpointNodes.evalAccuracy.textContent = metrics ? percent(metrics.evalAccuracy) : "--";
+    checkpointNodes.selfPlayRound.textContent = latest ? latest.round : "--";
+    checkpointNodes.trainedSide.textContent = latest ? latest.trained : "--";
+    checkpointNodes.enemyAction.textContent = enemyModel ? enemyAction : "--";
+    checkpointNodes.pilotWinRate.textContent = latest ? percent(latest.pilotWinRate) : "--";
+    checkpointNodes.enemyPressure.textContent = latest ? percent(latest.enemyPressure) : "--";
+  }
+
+  function percent(value) {
+    return Math.round(Number(value || 0) * 100) + "%";
   }
 
   function loop(now) {
@@ -141,10 +179,13 @@
 
   function update(dt) {
     fireCooldown = Math.max(0, fireCooldown - dt);
+    enemyThinkCooldown = Math.max(0, enemyThinkCooldown - dt);
+    enemyShotCooldown = Math.max(0, enemyShotCooldown - dt);
     shake = Math.max(0, shake - dt);
     if (pilot) runPilot(dt);
     updateShip(dt);
     updateBullets(dt);
+    runEnemyModel(dt);
     updateAliens(dt);
     maybeAlienFire(dt);
     checkHits();
@@ -173,20 +214,21 @@
   }
 
   function runModelPilot() {
-    var action = predictPilotAction();
+    var action = predictModelAction(pilotModel, "stay");
     keys.ArrowLeft = action === "left";
     keys.ArrowRight = action === "right";
     if (action === "fire") fire();
   }
 
-  function predictPilotAction() {
+  function predictModelAction(model, fallback) {
+    if (!model) return fallback;
     var features = pilotFeatures();
-    var bestAction = "stay";
+    var bestAction = fallback;
     var bestScoreForAction = -Infinity;
-    pilotModel.actions.forEach(function (action, actionIndex) {
+    model.actions.forEach(function (action, actionIndex) {
       var score = 0;
       features.forEach(function (value, featureIndex) {
-        score += value * Number(pilotModel.weights[featureIndex][actionIndex] || 0);
+        score += value * Number(model.weights[featureIndex][actionIndex] || 0);
       });
       if (score > bestScoreForAction) {
         bestScoreForAction = score;
@@ -194,6 +236,27 @@
       }
     });
     return bestAction;
+  }
+
+  function runEnemyModel() {
+    if (!enemyModel || enemyThinkCooldown > 0 || !running) return;
+    var liveAliens = state.aliens.filter(function (alien) { return alien.alive; });
+    if (!liveAliens.length) return;
+
+    var action = predictModelAction(enemyModel, "drop");
+    enemyAction = action;
+    if (action === "drift_left") {
+      state.fleetDirection = -1;
+    } else if (action === "drift_right") {
+      state.fleetDirection = 1;
+    } else if (action === "drop") {
+      liveAliens.forEach(function (alien) { alien.y += state.fleetDrop * 0.35; });
+    } else if (action === "fire" && enemyShotCooldown <= 0) {
+      fireAlienShot(nearestThreat() || liveAliens[Math.floor(Math.random() * liveAliens.length)]);
+      enemyShotCooldown = 0.42;
+    }
+    enemyThinkCooldown = Math.max(0.12, 0.24 - state.wave * 0.008);
+    updateHud();
   }
 
   function pilotFeatures() {
@@ -278,19 +341,25 @@
   }
 
   function maybeAlienFire(dt) {
+    if (enemyModel) return;
     var liveAliens = state.aliens.filter(function (alien) { return alien.alive; });
     if (!liveAliens.length) return;
     var chance = (0.18 + state.wave * 0.035) * dt;
     if (Math.random() < chance) {
       var alien = liveAliens[Math.floor(Math.random() * liveAliens.length)];
-      state.enemyShots.push({
-        x: alien.x + alien.width / 2 - 3,
-        y: alien.y + alien.height,
-        width: 6,
-        height: 16,
-        speed: 210 + state.wave * 20
-      });
+      fireAlienShot(alien);
     }
+  }
+
+  function fireAlienShot(alien) {
+    if (!alien) return;
+    state.enemyShots.push({
+      x: alien.x + alien.width / 2 - 3,
+      y: alien.y + alien.height,
+      width: 6,
+      height: 16,
+      speed: 210 + state.wave * 20
+    });
   }
 
   function checkHits() {

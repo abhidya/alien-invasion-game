@@ -149,6 +149,13 @@ p {
   margin: 0;
 }
 
+.checkpoint-strip {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
 .score-strip div {
   min-height: 64px;
   padding: 10px;
@@ -157,7 +164,14 @@ p {
   background: rgba(8, 9, 24, 0.62);
 }
 
-.score-strip dt {
+.checkpoint-strip div {
+  min-height: 58px;
+  padding: 9px 0;
+  border-top: 1px solid rgba(52, 245, 255, 0.22);
+}
+
+.score-strip dt,
+.checkpoint-strip dt {
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 900;
@@ -165,11 +179,17 @@ p {
   text-transform: uppercase;
 }
 
-.score-strip dd {
+.score-strip dd,
+.checkpoint-strip dd {
   margin: 3px 0 0;
   color: var(--text);
   font-size: 1.35rem;
   font-weight: 900;
+}
+
+.checkpoint-strip dd {
+  overflow-wrap: anywhere;
+  font-size: clamp(0.92rem, 1.8vw, 1.1rem);
 }
 
 canvas {
@@ -232,6 +252,10 @@ canvas {
   .score-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .checkpoint-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 520px) {
@@ -256,5 +280,9 @@ canvas {
 
   canvas {
     aspect-ratio: 10 / 9;
+  }
+
+  .checkpoint-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
