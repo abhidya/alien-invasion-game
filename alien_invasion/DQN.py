@@ -1,9 +1,9 @@
-"""NumPy DQN utilities for Alien Invasion self-play training.
+"""Lightweight NumPy DQN utilities for Alien Invasion.
 
-The local workspace is currently Python 3.14, where TensorFlow and PyTorch
-wheels are not available through pip. This module keeps the DQN path runnable by
-using a linear Q model trained with replay memory, a target network, Huber loss,
-and alternating pilot/enemy self-play.
+The live GitHub Pages model is trained by ``tools/train_static_pilot.py`` with
+Stable-Baselines3 DQN in the Python 3.12 RL venv. This module remains a small
+framework-free Q-learning helper for tests and local experiments that do not need
+the SB3/PyTorch stack.
 """
 
 from __future__ import annotations
@@ -210,7 +210,7 @@ class DQNAgent:
             self.load(self.weights_path)
         elif warn_legacy and LEGACY_WEIGHTS.exists() and self.name == "pilot":
             print(
-                f"Legacy TensorFlow weights found at {LEGACY_WEIGHTS}; NumPy DQN "
+                f"Legacy TensorFlow weights found at {LEGACY_WEIGHTS}; lightweight NumPy DQN "
                 f"checkpoints use {self.weights_path}."
             )
 

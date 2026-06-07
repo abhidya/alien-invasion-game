@@ -49,12 +49,12 @@
       <dl class="checkpoint-strip" aria-label="Latest training checkpoint">
         <div><dt>Model</dt><dd id="model-name">loading</dd></div>
         <div><dt>Enemy</dt><dd id="enemy-model-name">loading</dd></div>
-        <div><dt>Eval</dt><dd id="eval-accuracy">--</dd></div>
+        <div><dt>Pilot win</dt><dd id="eval-accuracy">--</dd></div>
         <div><dt>Round</dt><dd id="self-play-round">--</dd></div>
         <div><dt>Side</dt><dd id="trained-side">--</dd></div>
         <div><dt>Enemy act</dt><dd id="enemy-action">--</dd></div>
-        <div><dt>Pilot win</dt><dd id="pilot-win-rate">--</dd></div>
-        <div><dt>Pressure</dt><dd id="enemy-pressure">--</dd></div>
+        <div><dt>Enemy win</dt><dd id="pilot-win-rate">--</dd></div>
+        <div><dt>Drop rate</dt><dd id="enemy-pressure">--</dd></div>
       </dl>
       <p class="hint">
         Keyboard: Arrow keys or A/D move, Space fires, P toggles the trained pilot.
@@ -74,9 +74,9 @@
       <article>
         <h2>AI status</h2>
         <p>
-          The browser pilot and enemies use the latest NumPy RL self-play model artifact.
+          The browser pilot and enemies use the latest exported SB3 DQN self-play artifact.
           The pilot controls ship movement and fire; the enemy model controls fleet pressure
-          and shots.
+          and cooldown-limited shots/drops.
         </p>
       </article>
       <article>

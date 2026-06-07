@@ -33,17 +33,19 @@ Controls:
 
 The pilot button uses `js/galagai-model.json` when available. If that file is
 missing or fails to load, the browser falls back to a deterministic heuristic.
-The model JSON also carries the latest NumPy RL self-play weights for both the
+The model JSON also carries the latest SB3 DQN self-play networks for both the
 pilot and the enemies, so the GitHub Pages surface runs both latest policies.
 
 ### Retrain the Static Pilot and Enemies
 
-This is the fast, reproducible RL model path for the portfolio demo. It uses
-NumPy only: no TensorFlow, no PyTorch, and no GPU-specific install path.
+This is the reproducible RL model path for the portfolio demo. It trains real
+Stable-Baselines3 DQN agents in a headless version of the same arcade loop the
+browser runs, then exports the learned Q networks to static JSON.
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
+python3.12 -m venv .venv-rl
+. .venv-rl/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements-static-pilot.txt
 python tools/train_static_pilot.py
 ```
@@ -53,28 +55,30 @@ Latest checked-in training run:
 ```json
 {
   "model": "js/galagai-model.json",
-  "algorithm": "numpy-linear-double-dqn",
-  "rounds": 8,
-  "episodesPerRound": 180,
-  "evalEpisodes": 120,
+  "algorithm": "stable-baselines3-dqn",
+  "rounds": 7,
+  "timestepsPerRound": 1800,
+  "evalEpisodes": 40,
   "selfPlayLatest": {
-    "round": 8,
-    "trained": "enemies",
-    "pilotWinRate": 0.975,
-    "enemyWinRate": 0.025,
-    "enemyPressure": 0.6946,
-    "averageScore": 282.08,
+    "round": 7,
+    "trained": "pilot",
+    "pilotWinRate": 0.0,
+    "enemyWinRate": 1.0,
+    "averageScore": 300.0,
     "averageWave": 1.0,
-    "averageSteps": 73.05,
-    "pilotEpsilon": 0.05,
-    "enemyEpsilon": 0.05
+    "averageSteps": 94.0,
+    "enemyDropRate": 0.0,
+    "invalidDropRate": 0.0,
+    "enemyFireRate": 0.0745,
+    "pilotFireRate": 0.1277
   }
 }
 ```
 
-This artifact contains a linear Q policy for the pilot and a separate linear Q
-policy for the enemies. The browser uses the pilot policy for ship movement/fire
-and the enemy policy for fleet drift, drop pressure, and enemy fire.
+This artifact contains an exported DQN Q-network for the pilot and a separate
+exported DQN Q-network for the enemies. The browser uses the pilot network for
+ship movement/fire and the enemy network for fleet drift, cooldown-limited drops,
+and enemy fire.
 
 First create your fork of the repository, then clone using:
 ```
@@ -97,29 +101,29 @@ python game.py
 
 The game opens a Pygame window, so run it on a machine with a desktop display available.
 
-## NumPy DQN Self-Play Path
+## SB3 DQN Self-Play Path
 
-`alien_invasion/DQN.py` owns the local RL module: linear Double-DQN, replay
-memory, target weights, Huber loss, role-specific action spaces, and checkpointing
-for alternating pilot/enemy self-play. `alien_invasion/game.py` supplies Pygame
-transitions and freezes one side while training the other.
+`tools/train_static_pilot.py` owns the browser model path: a Gymnasium-compatible
+headless GalagAI environment plus alternating SB3 DQN training. Odd rounds train
+the pilot against the latest enemy policy; even rounds train the enemies against
+the latest pilot policy.
 
-This path is intentionally framework-free so it works on the current Python 3.14
-workspace. `torch` does not currently resolve here through pip, which means SB3
-is not a working local dependency path on this interpreter.
+Enemy drops are constrained in the environment and in the browser: drops have a
+1.08 second cooldown, invalid repeated drops are ignored, and invalid drops are
+penalized during enemy training. This prevents a degenerate enemy from winning by
+spamming drop.
 
 ```bash
-python3 -m venv .venv-rl
+python3.12 -m venv .venv-rl
 . .venv-rl/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements-ml.txt
 python tools/train_static_pilot.py
-python -m alien_invasion.game --episodes 10 --fps 240 --train-role alternate --alternate-every 1 --checkpoint-dir alien_invasion/checkpoints --no-plot
 ```
 
-The static trainer writes `js/galagai-model.json` for GitHub Pages. The Pygame
-trainer writes `.npz` pilot and enemy checkpoints under `alien_invasion/checkpoints/`.
-The checked-in `alien_invasion/weights.hdf5` file is a legacy TensorFlow artifact
-preserved only for inspection.
+The static trainer writes `js/galagai-model.json` for GitHub Pages. The checked-in
+`alien_invasion/weights.hdf5` file is a legacy TensorFlow artifact preserved only
+for inspection.
 
 For a future Gymnasium adapter, `alien_invasion/gym_space.py` documents the
 modern `reset` and `step` shape:
@@ -158,8 +162,9 @@ instead of crashing the Flask process.
 ## Demo Limitations
 
 - Pygame play requires a graphical desktop session and keyboard input.
-- The static browser pilot and enemies are trained and runnable, but they are
-  lightweight feature policies for the portfolio demo, not deep neural networks.
+- The static browser pilot and enemies are trained and runnable exported DQN
+  networks, but the browser still runs them as static JSON math rather than
+  loading Python or PyTorch.
 - The included `weights.hdf5` file is a legacy experimental asset, not required for the basic manual game.
 - The Flask scoreboard is optional and needs MongoDB connectivity before `/get_scores` can return real data.
 ## Contributions:

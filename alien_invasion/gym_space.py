@@ -14,9 +14,9 @@ from dataclasses import dataclass
 class GymnasiumAdapterSpec:
     """Interface facts a Gymnasium adapter must satisfy."""
 
-    observation_shape: tuple[int, int, int] = (68, 52, 1)
-    pilot_actions: tuple[str, ...] = ("right", "left", "fire", "hold")
-    enemy_actions: tuple[str, ...] = ("drift_left", "drop", "drift_right")
+    observation_shape: tuple[int, ...] = (11,)
+    pilot_actions: tuple[str, ...] = ("left", "right", "fire", "stay")
+    enemy_actions: tuple[str, ...] = ("drift_left", "drop", "drift_right", "fire")
     reset_returns_info: bool = True
     step_returns_terminated_truncated: bool = True
     render_mode_required_at_make: bool = True
@@ -24,17 +24,17 @@ class GymnasiumAdapterSpec:
 
 GYMNASIUM_REFERENCE = {
     "environment_import": "import gymnasium as gym",
-    "local_trainer": "alien_invasion.DQN.DQNAgent",
+    "local_trainer": "tools.train_static_pilot.train_self_play",
     "why": (
-        "Alien Invasion has discrete pilot and enemy actions. The current "
-        "Python 3.14-compatible path uses NumPy Q agents; a Gymnasium adapter "
-        "would let that same loop expose reset/step/render cleanly."
+        "Alien Invasion has discrete pilot and enemy actions. The static "
+        "trainer now uses a Gymnasium-compatible headless game loop and "
+        "alternating Stable-Baselines3 DQN agents."
     ),
     "notes": [
         "Use a separate evaluation environment, not the training loop.",
         "Handle terminated and truncated separately in custom adapters.",
         "Freeze the opponent policy while training the active self-play role.",
-        "Stable-Baselines3 remains a good option on Python versions where PyTorch resolves.",
+        "Rate-limit and penalize invalid enemy drop actions to avoid drop spam.",
     ],
 }
 
