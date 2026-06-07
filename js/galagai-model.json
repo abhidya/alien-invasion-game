@@ -1,6 +1,6 @@
 {
-  "model": "linear-softmax-pilot",
-  "version": 2,
+  "model": "numpy-linear-dqn-self-play",
+  "version": 3,
   "actions": [
     "left",
     "right",
@@ -19,149 +19,238 @@
   ],
   "weights": [
     [
-      0.242987,
-      0.177683,
-      -0.468848,
-      0.048178
+      3.875887,
+      4.060061,
+      4.012984,
+      4.078091
     ],
     [
-      -3.359672,
-      3.359738,
-      0.015399,
-      -0.015465
+      -0.855844,
+      0.378043,
+      -1.639189,
+      -0.491101
     ],
     [
-      2.271366,
-      2.254008,
-      -3.340991,
-      -1.184384
+      -2.092039,
+      -2.082301,
+      -5.813047,
+      -1.986715
     ],
     [
-      -0.001944,
-      -0.085604,
-      -0.040106,
-      0.127654
+      -0.073062,
+      -0.147834,
+      -0.148197,
+      -0.237575
     ],
     [
-      0.120565,
-      0.174039,
-      -0.230359,
-      -0.064245
+      -0.030593,
+      -0.048294,
+      -0.288028,
+      0.194737
     ],
     [
-      0.209221,
-      0.208082,
-      1.682535,
-      -2.099837
+      0.738585,
+      0.549307,
+      1.3632,
+      0.413989
     ],
     [
-      -0.016237,
-      0.154078,
-      -0.216281,
-      0.078441
+      -0.569845,
+      -0.633235,
+      -0.783419,
+      -0.703834
     ],
     [
-      0.100606,
-      -0.02203,
-      -0.003971,
-      -0.074605
+      0.387313,
+      0.405995,
+      0.401311,
+      0.408115
     ]
   ],
-  "metrics": {
-    "trainAccuracy": 0.9243,
-    "evalAccuracy": 0.9277,
-    "confusion": [
-      [
-        1338,
-        34,
-        3,
-        0
-      ],
-      [
-        43,
-        1319,
-        3,
-        0
-      ],
-      [
-        54,
-        41,
-        126,
-        0
-      ],
-      [
-        16,
-        23,
-        0,
-        0
-      ]
+  "enemies": {
+    "model": "numpy-linear-dqn-enemies",
+    "actions": [
+      "drift_left",
+      "drop",
+      "drift_right",
+      "fire"
     ],
+    "features": [
+      "bias",
+      "target_dx",
+      "abs_target_dx",
+      "threat_dx",
+      "threat_y",
+      "bullet_ready",
+      "alien_count",
+      "wave"
+    ],
+    "weights": [
+      [
+        -0.400574,
+        -0.786699,
+        -0.928467,
+        -0.688594
+      ],
+      [
+        -0.36817,
+        -0.295279,
+        -0.078537,
+        -0.211719
+      ],
+      [
+        0.651797,
+        0.952885,
+        0.840744,
+        0.852761
+      ],
+      [
+        0.026361,
+        -0.045757,
+        -0.112907,
+        -0.200205
+      ],
+      [
+        0.089806,
+        0.244759,
+        0.346746,
+        0.063182
+      ],
+      [
+        -0.275679,
+        -0.479913,
+        -0.232609,
+        -0.358798
+      ],
+      [
+        -0.930343,
+        -0.781477,
+        -0.650763,
+        -0.713055
+      ],
+      [
+        -0.040199,
+        -0.078222,
+        -0.093952,
+        -0.068328
+      ]
+    ]
+  },
+  "metrics": {
+    "rlAlgorithm": "numpy-linear-double-dqn",
+    "evalAccuracy": 0.975,
+    "enemyWinRate": 0.025,
     "selfPlay": {
-      "type": "alternating-static-curriculum",
+      "type": "numpy-linear-double-dqn-self-play",
       "rounds": [
         {
           "round": 1,
           "trained": "pilot",
-          "pilotWinRate": 0.7884,
-          "enemyPressure": 0.38,
-          "averageWave": 3.77
+          "pilotWinRate": 0.5083,
+          "enemyWinRate": 0.4917,
+          "enemyPressure": 0.7732,
+          "averageScore": 156.25,
+          "averageWave": 1.0,
+          "averageSteps": 75.69,
+          "pilotEpsilon": 0.05,
+          "enemyEpsilon": 1.0
         },
         {
           "round": 2,
           "trained": "enemies",
-          "pilotWinRate": 0.7814,
-          "enemyPressure": 0.4093,
-          "averageWave": 3.72
+          "pilotWinRate": 0.3833,
+          "enemyWinRate": 0.6167,
+          "enemyPressure": 0.7633,
+          "averageScore": 205.83,
+          "averageWave": 1.0,
+          "averageSteps": 70.37,
+          "pilotEpsilon": 0.05,
+          "enemyEpsilon": 0.1327
         },
         {
           "round": 3,
           "trained": "pilot",
-          "pilotWinRate": 0.7874,
-          "enemyPressure": 0.4093,
-          "averageWave": 3.74
+          "pilotWinRate": 0.825,
+          "enemyWinRate": 0.175,
+          "enemyPressure": 0.6546,
+          "averageScore": 335.83,
+          "averageWave": 1.0,
+          "averageSteps": 46.48,
+          "pilotEpsilon": 0.05,
+          "enemyEpsilon": 0.1327
         },
         {
           "round": 4,
           "trained": "enemies",
-          "pilotWinRate": 0.7835,
-          "enemyPressure": 0.4254,
-          "averageWave": 3.71
+          "pilotWinRate": 0.375,
+          "enemyWinRate": 0.625,
+          "enemyPressure": 0.7161,
+          "averageScore": 203.33,
+          "averageWave": 1.0,
+          "averageSteps": 59.17,
+          "pilotEpsilon": 0.05,
+          "enemyEpsilon": 0.05
         },
         {
           "round": 5,
           "trained": "pilot",
-          "pilotWinRate": 0.7876,
-          "enemyPressure": 0.4254,
-          "averageWave": 3.72
+          "pilotWinRate": 0.9417,
+          "enemyWinRate": 0.0583,
+          "enemyPressure": 0.5684,
+          "averageScore": 344.17,
+          "averageWave": 1.0,
+          "averageSteps": 37.11,
+          "pilotEpsilon": 0.05,
+          "enemyEpsilon": 0.05
         },
         {
           "round": 6,
           "trained": "enemies",
-          "pilotWinRate": 0.7827,
-          "enemyPressure": 0.4457,
-          "averageWave": 3.69
+          "pilotWinRate": 1.0,
+          "enemyWinRate": 0.0,
+          "enemyPressure": 0.5233,
+          "averageScore": 350.0,
+          "averageWave": 1.0,
+          "averageSteps": 37.87,
+          "pilotEpsilon": 0.05,
+          "enemyEpsilon": 0.05
         },
         {
           "round": 7,
           "trained": "pilot",
-          "pilotWinRate": 0.7876,
-          "enemyPressure": 0.4457,
-          "averageWave": 3.7
+          "pilotWinRate": 0.9917,
+          "enemyWinRate": 0.0083,
+          "enemyPressure": 0.5206,
+          "averageScore": 349.58,
+          "averageWave": 1.0,
+          "averageSteps": 38.05,
+          "pilotEpsilon": 0.05,
+          "enemyEpsilon": 0.05
         },
         {
           "round": 8,
           "trained": "enemies",
-          "pilotWinRate": 0.7814,
-          "enemyPressure": 0.4715,
-          "averageWave": 3.65
+          "pilotWinRate": 0.975,
+          "enemyWinRate": 0.025,
+          "enemyPressure": 0.6946,
+          "averageScore": 282.08,
+          "averageWave": 1.0,
+          "averageSteps": 73.05,
+          "pilotEpsilon": 0.05,
+          "enemyEpsilon": 0.05
         }
       ],
       "latest": {
         "round": 8,
         "trained": "enemies",
-        "pilotWinRate": 0.7814,
-        "enemyPressure": 0.4715,
-        "averageWave": 3.65
+        "pilotWinRate": 0.975,
+        "enemyWinRate": 0.025,
+        "enemyPressure": 0.6946,
+        "averageScore": 282.08,
+        "averageWave": 1.0,
+        "averageSteps": 73.05,
+        "pilotEpsilon": 0.05,
+        "enemyEpsilon": 0.05
       }
     }
   }

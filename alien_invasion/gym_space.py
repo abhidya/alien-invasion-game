@@ -1,8 +1,8 @@
-"""Gymnasium/SB3 reference for future Alien Invasion environment adapters.
+"""Gymnasium reference for future Alien Invasion environment adapters.
 
 This file used to execute an unrelated Atari CEM example at import time with
 old ``gym`` and ``keras-rl`` imports. It is now a non-executing reference for
-the adapter shape needed before using Stable-Baselines3 directly.
+the adapter shape needed before wrapping the game as a modern Gymnasium env.
 """
 
 from __future__ import annotations
@@ -22,20 +22,19 @@ class GymnasiumAdapterSpec:
     render_mode_required_at_make: bool = True
 
 
-SB3_DQN_REFERENCE = {
-    "import": "from stable_baselines3 import DQN",
+GYMNASIUM_REFERENCE = {
     "environment_import": "import gymnasium as gym",
-    "pilot_policy": "CnnPolicy",
-    "enemy_policy": "CnnPolicy",
+    "local_trainer": "alien_invasion.DQN.DQNAgent",
     "why": (
-        "Alien Invasion has discrete pilot and enemy actions. A frame-shaped "
-        "observation should use a CNN policy; low-dimensional engineered "
-        "features should use an MLP policy."
+        "Alien Invasion has discrete pilot and enemy actions. The current "
+        "Python 3.14-compatible path uses NumPy Q agents; a Gymnasium adapter "
+        "would let that same loop expose reset/step/render cleanly."
     ),
     "notes": [
         "Use a separate evaluation environment, not the training loop.",
         "Handle terminated and truncated separately in custom adapters.",
         "Freeze the opponent policy while training the active self-play role.",
+        "Stable-Baselines3 remains a good option on Python versions where PyTorch resolves.",
     ],
 }
 
@@ -48,5 +47,5 @@ def describe_adapter() -> dict[str, object]:
         "enemy_action_count": len(spec.enemy_actions),
         "gymnasium_reset": "obs, info = env.reset(seed=seed)",
         "gymnasium_step": "obs, reward, terminated, truncated, info = env.step(action)",
-        "stable_baselines3": SB3_DQN_REFERENCE,
+        "gymnasium": GYMNASIUM_REFERENCE,
     }

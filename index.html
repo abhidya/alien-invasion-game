@@ -48,9 +48,11 @@
       </div>
       <dl class="checkpoint-strip" aria-label="Latest training checkpoint">
         <div><dt>Model</dt><dd id="model-name">loading</dd></div>
+        <div><dt>Enemy</dt><dd id="enemy-model-name">loading</dd></div>
         <div><dt>Eval</dt><dd id="eval-accuracy">--</dd></div>
         <div><dt>Round</dt><dd id="self-play-round">--</dd></div>
         <div><dt>Side</dt><dd id="trained-side">--</dd></div>
+        <div><dt>Enemy act</dt><dd id="enemy-action">--</dd></div>
         <div><dt>Pilot win</dt><dd id="pilot-win-rate">--</dd></div>
         <div><dt>Pressure</dt><dd id="enemy-pressure">--</dd></div>
       </dl>
@@ -72,9 +74,9 @@
       <article>
         <h2>AI status</h2>
         <p>
-          The browser pilot is a trained linear softmax model for this static demo, with
-          checkpoint metrics generated from an alternating pilot/enemy curriculum. The local
-          Python path now owns the heavier dueling DQN self-play trainer.
+          The browser pilot and enemies use the latest NumPy RL self-play model artifact.
+          The pilot controls ship movement and fire; the enemy model controls fleet pressure
+          and shots.
         </p>
       </article>
       <article>

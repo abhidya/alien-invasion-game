@@ -7,25 +7,28 @@ from tools import train_static_pilot
 
 
 class StaticPilotArtifactTest(unittest.TestCase):
-    def test_write_model_includes_self_play_metrics(self):
-        training = train_static_pilot.build_dataset(seed=11, samples=96)
-        evaluation = train_static_pilot.build_dataset(seed=12, samples=64)
-        weights = train_static_pilot.train(training, epochs=10, lr=0.2, l2=0.001)
-        train_acc = train_static_pilot.accuracy(weights, training)
-        eval_acc = train_static_pilot.accuracy(weights, evaluation)
-        matrix = train_static_pilot.confusion(weights, evaluation)
-        self_play = train_static_pilot.alternating_curriculum(seed=13, eval_acc=eval_acc, rounds=4)
+    def test_write_model_includes_pilot_and_enemy_rl_weights(self):
+        pilot, enemies, self_play = train_static_pilot.train_self_play(
+            seed=21,
+            rounds=2,
+            episodes_per_round=8,
+            eval_episodes=4,
+            max_steps=35,
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "model.json"
-            train_static_pilot.write_model(path, weights, train_acc, eval_acc, matrix, self_play)
+            train_static_pilot.write_model(path, pilot, enemies, self_play)
             payload = json.loads(path.read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["version"], 2)
+        self.assertEqual(payload["version"], 3)
+        self.assertEqual(payload["model"], "numpy-linear-dqn-self-play")
         self.assertEqual(payload["actions"], train_static_pilot.ACTIONS)
         self.assertEqual(payload["features"], train_static_pilot.FEATURES)
-        self.assertIn("selfPlay", payload["metrics"])
-        self.assertEqual(payload["metrics"]["selfPlay"]["latest"]["round"], 4)
+        self.assertEqual(payload["enemies"]["actions"], train_static_pilot.ENEMY_ACTIONS)
+        self.assertEqual(len(payload["weights"]), len(train_static_pilot.FEATURES))
+        self.assertEqual(len(payload["enemies"]["weights"]), len(train_static_pilot.FEATURES))
+        self.assertEqual(payload["metrics"]["selfPlay"]["latest"]["round"], 2)
 
 
 if __name__ == "__main__":

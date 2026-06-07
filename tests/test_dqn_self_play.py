@@ -1,8 +1,12 @@
 import unittest
+import tempfile
+from pathlib import Path
 
 import numpy as np
 
 from alien_invasion.DQN import (
+    DQNAgent,
+    DQNConfig,
     FRAME_SHAPE,
     ReplayBuffer,
     SelfPlaySchedule,
@@ -49,11 +53,12 @@ class DqnSelfPlayTest(unittest.TestCase):
         self.assertEqual(enemy_action_to_move(0), [-1, 1])
         self.assertEqual(enemy_action_to_move(1), [0, 1])
         self.assertEqual(enemy_action_to_move(2), [1, 1])
+        self.assertEqual(enemy_action_to_move(3), [0, 1])
 
         with self.assertRaises(ValueError):
             one_hot(4, 4)
         with self.assertRaises(ValueError):
-            enemy_action_to_move(3)
+            enemy_action_to_move(4)
 
     def test_pilot_and_enemy_rewards_are_opposed(self):
         before = TrainingSnapshot(score=100, ships_left=2, aliens_left=8)
@@ -61,6 +66,41 @@ class DqnSelfPlayTest(unittest.TestCase):
 
         self.assertLess(pilot_reward(before, after, done=False), 0)
         self.assertGreater(enemy_reward(before, after, done=False), 0)
+
+    def test_numpy_agent_trains_and_round_trips_checkpoint(self):
+        config = DQNConfig(
+            state_shape=(3,),
+            action_count=2,
+            include_bias=False,
+            min_replay_size=2,
+            batch_size=2,
+            learning_rate=0.05,
+        )
+        agent = DQNAgent(
+            config=config,
+            weights_path=Path("/tmp/unused-test-agent.npz"),
+            seed=7,
+            load_existing=False,
+            warn_legacy=False,
+        )
+        before = agent.weights.copy()
+        agent.remember(np.array([1, 0, 0]), 0, 1.0, np.array([0, 1, 0]), False)
+        agent.remember(np.array([0, 1, 0]), 1, -1.0, np.array([0, 0, 1]), True)
+
+        loss = agent.train()
+
+        self.assertIsNotNone(loss)
+        self.assertFalse(np.array_equal(before, agent.weights))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = agent.save(Path(tmpdir) / "agent.npz")
+            loaded = DQNAgent(
+                config=config,
+                weights_path=path,
+                seed=8,
+                load_existing=True,
+                warn_legacy=False,
+            )
+        self.assertTrue(np.allclose(agent.weights, loaded.weights))
 
 
 if __name__ == "__main__":

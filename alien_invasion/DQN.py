@@ -1,9 +1,9 @@
-"""Modern DQN utilities for Alien Invasion self-play training.
+"""NumPy DQN utilities for Alien Invasion self-play training.
 
-The browser demo uses a tiny static model so GitHub Pages can run without a ML
-stack. This module is the heavier local-training path for the Pygame game. It
-keeps Keras optional at import time so non-ML tests can still run on machines
-without TensorFlow wheels.
+The local workspace is currently Python 3.14, where TensorFlow and PyTorch
+wheels are not available through pip. This module keeps the DQN path runnable by
+using a linear Q model trained with replay memory, a target network, Huber loss,
+and alternating pilot/enemy self-play.
 """
 
 from __future__ import annotations
@@ -20,29 +20,36 @@ import numpy as np
 FRAME_SHAPE = (68, 52, 1)
 FLAT_FRAME_SIZE = FRAME_SHAPE[0] * FRAME_SHAPE[1]
 PILOT_ACTIONS = ("right", "left", "fire", "hold")
-ENEMY_ACTIONS = ("drift_left", "drop", "drift_right")
+ENEMY_ACTIONS = ("drift_left", "drop", "drift_right", "fire")
 DEFAULT_CHECKPOINT_DIR = Path(__file__).with_name("checkpoints")
-DEFAULT_PILOT_WEIGHTS = DEFAULT_CHECKPOINT_DIR / "pilot.weights.h5"
-DEFAULT_ENEMY_WEIGHTS = DEFAULT_CHECKPOINT_DIR / "enemy.weights.h5"
+DEFAULT_PILOT_WEIGHTS = DEFAULT_CHECKPOINT_DIR / "pilot.npz"
+DEFAULT_ENEMY_WEIGHTS = DEFAULT_CHECKPOINT_DIR / "enemy.npz"
 LEGACY_WEIGHTS = Path(__file__).with_name("weights.hdf5")
 
 
 @dataclass(frozen=True)
 class DQNConfig:
-    """Configuration for the dueling Double-DQN implementation."""
+    """Configuration for the NumPy linear Double-DQN implementation."""
 
-    state_shape: tuple[int, int, int] = FRAME_SHAPE
+    state_shape: tuple[int, ...] = FRAME_SHAPE
     action_count: int = len(PILOT_ACTIONS)
-    gamma: float = 0.99
-    learning_rate: float = 2.5e-4
+    include_bias: bool = True
+    gamma: float = 0.94
+    learning_rate: float = 0.03
+    l2: float = 0.0005
     epsilon_start: float = 1.0
     epsilon_final: float = 0.05
-    epsilon_decay_steps: int = 50_000
-    replay_capacity: int = 50_000
-    min_replay_size: int = 1_000
+    epsilon_decay_steps: int = 25_000
+    replay_capacity: int = 20_000
+    min_replay_size: int = 64
     batch_size: int = 32
-    target_sync_interval: int = 500
+    target_sync_interval: int = 200
     gradient_steps: int = 1
+    seed_scale: float = 0.01
+
+    @property
+    def feature_count(self) -> int:
+        return int(np.prod(self.state_shape)) + (1 if self.include_bias else 0)
 
 
 @dataclass(frozen=True)
@@ -107,34 +114,19 @@ class SelfPlaySchedule:
         return self.roles[role_index]
 
 
-def _load_keras():
-    try:
-        import keras
-        from keras import layers, losses, ops, optimizers
-    except ImportError as error:  # pragma: no cover - depends on optional ML stack.
-        raise ImportError(
-            "DQNAgent requires Keras 3 with a TensorFlow backend. Use Python "
-            "3.10-3.13 and install the ML environment with "
-            "`python -m pip install -r requirements-ml.txt`."
-        ) from error
-    return keras, layers, losses, ops, optimizers
-
-
-def normalize_state(state: np.ndarray | Iterable[float]) -> np.ndarray:
-    """Return one frame as float32 with shape ``(68, 52, 1)``."""
+def normalize_state(state: np.ndarray | Iterable[float], shape: tuple[int, ...] = FRAME_SHAPE) -> np.ndarray:
+    """Return one state as float32 with the configured shape."""
 
     array = np.asarray(state, dtype=np.float32)
-    if array.shape == FRAME_SHAPE:
+    if array.shape == shape:
         return array
-    if array.shape == FRAME_SHAPE[:2]:
+    if shape == FRAME_SHAPE and array.shape == FRAME_SHAPE[:2]:
         return array[..., np.newaxis]
-    if array.shape == (FLAT_FRAME_SIZE,):
+    if shape == FRAME_SHAPE and array.shape == (FLAT_FRAME_SIZE,):
         return array.reshape(FRAME_SHAPE)
-    raise ValueError(f"Expected state shape {FRAME_SHAPE}, {(68, 52)}, or {(FLAT_FRAME_SIZE,)}, got {array.shape}.")
-
-
-def batch_states(states: Iterable[np.ndarray]) -> np.ndarray:
-    return np.stack([normalize_state(state) for state in states], axis=0)
+    if len(shape) == 1 and array.shape == (shape[0],):
+        return array
+    raise ValueError(f"Expected state shape {shape}, got {array.shape}.")
 
 
 def one_hot(action: int, action_count: int) -> np.ndarray:
@@ -152,12 +144,13 @@ def action_from_vector(action: int | Iterable[float]) -> int:
 
 
 def enemy_action_to_move(action: int) -> list[int]:
-    """Map the enemy agent's discrete action to the fleet move interface."""
+    """Map the enemy agent's discrete action to the Pygame fleet move interface."""
 
     moves = {
         0: [-1, 1],
         1: [0, 1],
         2: [1, 1],
+        3: [0, 1],
     }
     if action not in moves:
         raise ValueError(f"Unknown enemy action {action}.")
@@ -185,7 +178,7 @@ def enemy_reward(before: TrainingSnapshot, after: TrainingSnapshot, done: bool) 
 
 
 class DQNAgent:
-    """Dueling Double-DQN agent with replay, target network, and checkpoints."""
+    """Linear Double-DQN agent with replay, target weights, and checkpoints."""
 
     def __init__(
         self,
@@ -194,28 +187,31 @@ class DQNAgent:
         weights_path: Path | str | None = None,
         name: str = "pilot",
         seed: int | None = None,
+        load_existing: bool = True,
+        warn_legacy: bool = True,
     ):
         self.config = config or DQNConfig()
         self.name = name
         self.weights_path = Path(weights_path) if weights_path else DEFAULT_PILOT_WEIGHTS
         self.random = random.Random(seed)
+        self.rng = np.random.default_rng(seed)
         self.replay = ReplayBuffer(self.config.replay_capacity)
         self.training_steps = 0
         self.episodes = 0
         self.last_loss: float | None = None
+        self.weights = self.rng.normal(
+            0.0,
+            self.config.seed_scale,
+            size=(self.config.feature_count, self.config.action_count),
+        ).astype(np.float32)
+        self.target_weights = self.weights.copy()
 
-        self.keras, self.layers, self.losses, self.ops, self.optimizers = _load_keras()
-        self.model = self._build_network()
-        self.target_model = self._build_network()
-        self.target_model.set_weights(self.model.get_weights())
-
-        if self.weights_path.exists():
-            self.model.load_weights(str(self.weights_path))
-            self.target_model.set_weights(self.model.get_weights())
-        elif LEGACY_WEIGHTS.exists() and self.name == "pilot":
+        if load_existing and self.weights_path.exists():
+            self.load(self.weights_path)
+        elif warn_legacy and LEGACY_WEIGHTS.exists() and self.name == "pilot":
             print(
-                f"Legacy weights found at {LEGACY_WEIGHTS}; new DQN checkpoints "
-                f"use {self.weights_path}."
+                f"Legacy TensorFlow weights found at {LEGACY_WEIGHTS}; NumPy DQN "
+                f"checkpoints use {self.weights_path}."
             )
 
     @property
@@ -223,44 +219,28 @@ class DQNAgent:
         progress = min(1.0, self.training_steps / max(1, self.config.epsilon_decay_steps))
         return self.config.epsilon_start + progress * (self.config.epsilon_final - self.config.epsilon_start)
 
-    def _build_network(self):
-        inputs = self.keras.Input(shape=self.config.state_shape, name=f"{self.name}_frame")
-        x = self.layers.Rescaling(1.0, name="binary_frame")(inputs)
-        x = self.layers.Conv2D(16, 5, strides=2, activation="relu", padding="same", name="conv_1")(x)
-        x = self.layers.Conv2D(32, 3, strides=2, activation="relu", padding="same", name="conv_2")(x)
-        x = self.layers.Flatten(name="flatten")(x)
-        x = self.layers.Dense(128, activation="relu", name="features")(x)
+    def features(self, state: np.ndarray | Iterable[float]) -> np.ndarray:
+        state_array = normalize_state(state, self.config.state_shape).reshape(-1).astype(np.float32)
+        if self.config.include_bias:
+            return np.concatenate(([1.0], state_array)).astype(np.float32)
+        return state_array
 
-        value = self.layers.Dense(64, activation="relu", name="value_hidden")(x)
-        value = self.layers.Dense(1, name="state_value")(value)
-        advantage = self.layers.Dense(64, activation="relu", name="advantage_hidden")(x)
-        advantage = self.layers.Dense(self.config.action_count, name="advantage")(advantage)
-        centered = self.layers.Lambda(
-            lambda tensor: tensor - self.ops.mean(tensor, axis=1, keepdims=True),
-            name="center_advantage",
-        )(advantage)
-        q_values = self.layers.Add(name="q_values")([value, centered])
-
-        model = self.keras.Model(inputs=inputs, outputs=q_values, name=f"{self.name}_dueling_dqn")
-        model.compile(
-            optimizer=self.optimizers.Adam(learning_rate=self.config.learning_rate),
-            loss=self.losses.Huber(),
-        )
-        return model
+    def q_values(self, state: np.ndarray | Iterable[float], *, target: bool = False) -> np.ndarray:
+        weights = self.target_weights if target else self.weights
+        return self.features(state) @ weights
 
     def act(self, state: np.ndarray, *, training: bool = True) -> int:
         if training and self.random.random() < self.epsilon:
             return self.random.randrange(self.config.action_count)
-        q_values = self.model.predict(normalize_state(state)[np.newaxis, ...], verbose=0)[0]
-        return int(np.argmax(q_values))
+        return int(np.argmax(self.q_values(state)))
 
     def remember(self, state, action, reward, next_state, done) -> None:
         self.replay.append(
             Transition(
-                normalize_state(state),
+                normalize_state(state, self.config.state_shape),
                 action_from_vector(action),
                 float(reward),
-                normalize_state(next_state),
+                normalize_state(next_state, self.config.state_shape),
                 bool(done),
             )
         )
@@ -280,21 +260,20 @@ class DQNAgent:
         steps = gradient_steps or self.config.gradient_steps
         for _ in range(steps):
             batch = self.replay.sample(self.config.batch_size)
-            states = batch_states(item.state for item in batch)
-            next_states = batch_states(item.next_state for item in batch)
-            actions = np.asarray([item.action for item in batch], dtype=np.int64)
-            rewards = np.asarray([item.reward for item in batch], dtype=np.float32)
-            dones = np.asarray([item.done for item in batch], dtype=np.float32)
+            for item in batch:
+                features = self.features(item.state)
+                next_features = self.features(item.next_state)
+                prediction = float(features @ self.weights[:, item.action])
+                next_action = int(np.argmax(next_features @ self.weights))
+                next_value = float(next_features @ self.target_weights[:, next_action])
+                target = item.reward if item.done else item.reward + self.config.gamma * next_value
+                td_error = prediction - target
+                huber_grad = td_error if abs(td_error) <= 1.0 else np.sign(td_error)
+                self.weights[:, item.action] -= self.config.learning_rate * (
+                    huber_grad * features + self.config.l2 * self.weights[:, item.action]
+                )
+                losses.append(0.5 * td_error * td_error if abs(td_error) <= 1.0 else abs(td_error) - 0.5)
 
-            targets = self.model.predict(states, verbose=0)
-            next_online = self.model.predict(next_states, verbose=0)
-            next_actions = np.argmax(next_online, axis=1)
-            next_target = self.target_model.predict(next_states, verbose=0)
-            next_values = next_target[np.arange(len(batch)), next_actions]
-            targets[np.arange(len(batch)), actions] = rewards + (1.0 - dones) * self.config.gamma * next_values
-
-            history = self.model.fit(states, targets, epochs=1, verbose=0)
-            losses.append(float(history.history["loss"][-1]))
             self.training_steps += 1
             if self.training_steps % self.config.target_sync_interval == 0:
                 self.sync_target_network()
@@ -303,13 +282,32 @@ class DQNAgent:
         return self.last_loss
 
     def sync_target_network(self) -> None:
-        self.target_model.set_weights(self.model.get_weights())
+        self.target_weights = self.weights.copy()
 
     def save(self, path: Path | str | None = None) -> Path:
         destination = Path(path) if path else self.weights_path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        self.model.save_weights(str(destination))
+        np.savez(
+            destination,
+            weights=self.weights,
+            target_weights=self.target_weights,
+            training_steps=np.asarray([self.training_steps], dtype=np.int64),
+            action_count=np.asarray([self.config.action_count], dtype=np.int64),
+            include_bias=np.asarray([int(self.config.include_bias)], dtype=np.int64),
+            state_shape=np.asarray(self.config.state_shape, dtype=np.int64),
+        )
         return destination
+
+    def load(self, path: Path | str) -> None:
+        payload = np.load(Path(path), allow_pickle=False)
+        weights = payload["weights"].astype(np.float32)
+        if weights.shape != self.weights.shape:
+            raise ValueError(f"Checkpoint shape {weights.shape} does not match agent shape {self.weights.shape}.")
+        self.weights = weights
+        self.target_weights = (
+            payload["target_weights"].astype(np.float32) if "target_weights" in payload.files else weights.copy()
+        )
+        self.training_steps = int(payload["training_steps"][0]) if "training_steps" in payload.files else 0
 
     def set_reward(self, score, beforescore, ships_left):
         before = TrainingSnapshot(score=int(beforescore), ships_left=3, aliens_left=0)
@@ -334,13 +332,13 @@ class AlternatingSelfPlayTrainer:
         base_seed = seed or 0
         self.pilot = DQNAgent(
             config=DQNConfig(action_count=len(PILOT_ACTIONS)),
-            weights_path=pilot_weights_path or self.checkpoint_dir / "pilot.weights.h5",
+            weights_path=pilot_weights_path or self.checkpoint_dir / "pilot.npz",
             name="pilot",
             seed=base_seed,
         )
         self.enemy = DQNAgent(
             config=DQNConfig(action_count=len(ENEMY_ACTIONS)),
-            weights_path=enemy_weights_path or self.checkpoint_dir / "enemy.weights.h5",
+            weights_path=enemy_weights_path or self.checkpoint_dir / "enemy.npz",
             name="enemy",
             seed=base_seed + 1,
         )
@@ -360,6 +358,6 @@ class AlternatingSelfPlayTrainer:
 
     def checkpoint(self, *, role: str, episode: int, score: int) -> SelfPlayCheckpoint:
         agent = self.agent_for_role(role)
-        path = agent.save(self.checkpoint_dir / f"{role}-episode-{episode:05d}.weights.h5")
+        path = agent.save(self.checkpoint_dir / f"{role}-episode-{episode:05d}.npz")
         agent.save()
         return SelfPlayCheckpoint(role=role, episode=episode, weights_path=path, score=score, epsilon=agent.epsilon)
