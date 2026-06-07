@@ -22,10 +22,12 @@ class StaticPilotArtifactTest(unittest.TestCase):
     def test_write_model_includes_exported_pilot_and_enemy_networks(self):
         pilot_model, enemy_model, self_play = train_static_pilot.train_self_play(
             seed=21,
-            rounds=2,
-            timesteps_per_round=64,
+            cycles=1,
+            phase_timesteps=64,
             eval_episodes=2,
             max_steps=80,
+            dominance_threshold=1.1,
+            max_phase_iterations=1,
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -33,15 +35,37 @@ class StaticPilotArtifactTest(unittest.TestCase):
             train_static_pilot.write_model(path, pilot_model, enemy_model, self_play)
             payload = json.loads(path.read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["version"], 4)
+        self.assertEqual(payload["version"], 5)
         self.assertEqual(payload["algorithm"], "stable-baselines3-dqn")
         self.assertEqual(payload["actions"], train_static_pilot.PILOT_ACTIONS)
         self.assertEqual(payload["features"], train_static_pilot.FEATURES)
         self.assertEqual(payload["enemies"]["actions"], train_static_pilot.ENEMY_ACTIONS)
+        self.assertEqual(len(payload["versions"]["pilot"]), 1)
+        self.assertEqual(len(payload["versions"]["enemies"]), 1)
         self.assertGreaterEqual(len(payload["network"]["layers"]), 2)
         self.assertGreaterEqual(len(payload["enemies"]["network"]["layers"]), 2)
+        self.assertGreaterEqual(len(payload["versions"]["pilot"][0]["network"]["layers"]), 2)
+        self.assertGreaterEqual(len(payload["versions"]["enemies"][0]["network"]["layers"]), 2)
         self.assertEqual(payload["metrics"]["selfPlay"]["latest"]["round"], 2)
+        self.assertEqual(payload["metrics"]["selfPlay"]["checkpointCounts"]["pilot"], 1)
+        self.assertEqual(payload["metrics"]["selfPlay"]["checkpointCounts"]["enemies"], 1)
         self.assertIn("invalidDropRate", payload["metrics"])
+
+    def test_dominance_gate_repeats_phase_until_threshold_or_cap(self):
+        _, _, self_play = train_static_pilot.train_self_play(
+            seed=31,
+            cycles=1,
+            phase_timesteps=32,
+            eval_episodes=1,
+            max_steps=40,
+            dominance_threshold=1.1,
+            max_phase_iterations=2,
+        )
+
+        self.assertEqual([round_info["trained"] for round_info in self_play["rounds"]], ["pilot", "pilot", "enemies", "enemies"])
+        self.assertEqual(len(self_play["checkpoints"]["pilot"]), 2)
+        self.assertEqual(len(self_play["checkpoints"]["enemies"]), 2)
+        self.assertTrue(all(not round_info["dominanceReached"] for round_info in self_play["rounds"]))
 
 
 if __name__ == "__main__":

@@ -212,6 +212,44 @@ canvas {
   background: linear-gradient(135deg, var(--green), var(--cyan));
 }
 
+.version-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.version-controls label {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(120px, 1fr) minmax(110px, 0.8fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 48px;
+  padding: 10px;
+  border: 1px solid rgba(52, 245, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(8, 9, 24, 0.5);
+}
+
+.version-controls span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.version-controls strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.95rem;
+}
+
+.version-controls input[type="range"] {
+  width: 100%;
+  accent-color: var(--green);
+}
+
 .hint {
   margin: 12px 0 0;
   font-size: 0.95rem;
@@ -256,6 +294,10 @@ canvas {
   .checkpoint-strip {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
+
+  .version-controls {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 520px) {
@@ -284,5 +326,9 @@ canvas {
 
   .checkpoint-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .version-controls label {
+    grid-template-columns: 1fr;
   }
 }

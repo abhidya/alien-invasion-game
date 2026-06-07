@@ -46,6 +46,18 @@
         <button id="ai-button" type="button" aria-pressed="false">Pilot: manual</button>
         <button id="reset-button" type="button">Reset</button>
       </div>
+      <div class="version-controls" aria-label="Model checkpoint selectors">
+        <label for="pilot-version">
+          <span>Pilot version</span>
+          <input id="pilot-version" type="range" min="0" max="0" value="0" step="1" disabled>
+          <strong id="pilot-version-label">loading</strong>
+        </label>
+        <label for="enemy-version">
+          <span>Enemy version</span>
+          <input id="enemy-version" type="range" min="0" max="0" value="0" step="1" disabled>
+          <strong id="enemy-version-label">loading</strong>
+        </label>
+      </div>
       <dl class="checkpoint-strip" aria-label="Latest training checkpoint">
         <div><dt>Model</dt><dd id="model-name">loading</dd></div>
         <div><dt>Enemy</dt><dd id="enemy-model-name">loading</dd></div>
