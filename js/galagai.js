@@ -576,21 +576,47 @@
 
   function pilotFeatures() {
     var shipCenter = state.ship.x + state.ship.width / 2;
+    var liveAliens = state.aliens.filter(function (alien) { return alien.alive; });
     var target = nearestThreat();
     var targetDx = 0;
     var alienCount = 0;
     if (target) {
       targetDx = clamp(((target.x + target.width / 2) - shipCenter) / (canvas.width / 2), -1, 1);
-      alienCount = state.aliens.filter(function (alien) { return alien.alive; }).length / 45;
+      alienCount = liveAliens.length / 45;
     }
 
     var closestShot = state.enemyShots.slice().sort(function (a, b) {
       return Math.abs((a.x + a.width / 2) - shipCenter) - Math.abs((b.x + b.width / 2) - shipCenter);
     })[0];
+    var dangerShot = dangerousEnemyShot(shipCenter);
+    var pilotBulletThreat = dangerousPilotBullet(liveAliens);
     var threatDx = closestShot
       ? clamp(((closestShot.x + closestShot.width / 2) - shipCenter) / (canvas.width / 2), -1, 1)
       : 1;
     var threatY = closestShot ? clamp(closestShot.y / canvas.height, 0, 1) : 0;
+    var dangerDx = dangerShot
+      ? clamp(((dangerShot.x + dangerShot.width / 2) - shipCenter) / (canvas.width / 2), -1, 1)
+      : 1;
+    var dangerY = dangerShot ? clamp(dangerShot.y / canvas.height, 0, 1) : 0;
+    var dangerLane = dangerShot ? shotLaneOverlap(dangerShot, state.ship) : 0;
+    var pilotBulletDx = 0;
+    var pilotBulletY = 0;
+    if (pilotBulletThreat) {
+      pilotBulletDx = clamp(
+        ((pilotBulletThreat.bullet.x + pilotBulletThreat.bullet.width / 2) -
+          (pilotBulletThreat.alien.x + pilotBulletThreat.alien.width / 2)) / (canvas.width / 2),
+        -1,
+        1
+      );
+      pilotBulletY = clamp(
+        (pilotBulletThreat.bullet.y - (pilotBulletThreat.alien.y + pilotBulletThreat.alien.height)) / canvas.height,
+        -1,
+        1
+      );
+    }
+    var beeCount = liveAliens.filter(function (alien) { return alien.role === "bee"; }).length / 45;
+    var gunshipCount = liveAliens.filter(function (alien) { return alien.role === "butterfly" || alien.role === "boss"; }).length / 45;
+    var bossCount = liveAliens.filter(function (alien) { return alien.role === "boss"; }).length / 45;
 
     return [
       targetDx,
@@ -603,8 +629,52 @@
       enemyDropCooldown <= 0 ? 1 : 0,
       1,
       fleetProgress(),
-      clamp(state.lives / 3, 0, 1)
+      clamp(state.lives / 3, 0, 1),
+      dangerDx,
+      dangerY,
+      dangerLane,
+      pilotBulletDx,
+      pilotBulletY,
+      clamp(beeCount, 0, 1),
+      clamp(gunshipCount, 0, 1),
+      clamp(bossCount, 0, 1)
     ];
+  }
+
+  function dangerousEnemyShot(shipCenter) {
+    return state.enemyShots.slice().sort(function (a, b) {
+      return enemyShotDangerScore(b, shipCenter) - enemyShotDangerScore(a, shipCenter);
+    })[0] || null;
+  }
+
+  function enemyShotDangerScore(shot, shipCenter) {
+    var laneWidth = Math.max(state.ship.width * 0.85, state.ship.width / 2 + shot.width / 2);
+    var laneScore = 1 - clamp(Math.abs((shot.x + shot.width / 2) - shipCenter) / laneWidth, 0, 1);
+    var yProgress = clamp(shot.y / canvas.height, 0, 1);
+    var distanceToShip = clamp(Math.max(0, state.ship.y - shot.y) / canvas.height, 0, 1);
+    return laneScore * 3 + yProgress - distanceToShip * 0.35;
+  }
+
+  function dangerousPilotBullet(liveAliens) {
+    var best = null;
+    state.bullets.forEach(function (bullet) {
+      liveAliens.forEach(function (alien) {
+        if (bullet.y + bullet.height < alien.y - 8) return;
+        var laneScore = shotLaneOverlap(bullet, alien);
+        var verticalScore = 1 - clamp(Math.abs(bullet.y - (alien.y + alien.height)) / canvas.height, 0, 1);
+        var score = laneScore * 3 + verticalScore;
+        if (!best || score > best.score) {
+          best = { score: score, bullet: bullet, alien: alien };
+        }
+      });
+    });
+    return best;
+  }
+
+  function shotLaneOverlap(shot, actor) {
+    var laneWidth = Math.max(actor.width * 0.85, actor.width / 2 + shot.width / 2);
+    var distance = Math.abs((shot.x + shot.width / 2) - (actor.x + actor.width / 2));
+    return 1 - clamp(distance / laneWidth, 0, 1);
   }
 
   function fleetProgress() {
@@ -694,10 +764,13 @@
   function maybeAlienFire(dt) {
     if (enemyModel) return;
     var liveAliens = state.aliens.filter(function (alien) { return alien.alive; });
-    if (!liveAliens.length) return;
+    var shooters = liveAliens.filter(function (alien) {
+      return alien.role === "butterfly" || alien.role === "boss";
+    });
+    if (!shooters.length) return;
     var chance = (0.18 + state.wave * 0.035) * dt;
     if (Math.random() < chance) {
-      var alien = liveAliens[Math.floor(Math.random() * liveAliens.length)];
+      var alien = shooters[Math.floor(Math.random() * shooters.length)];
       fireAlienShot(alien);
     }
   }

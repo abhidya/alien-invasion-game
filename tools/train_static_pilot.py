@@ -56,6 +56,14 @@ FEATURES = [
     "enemy_shot_ready",
     "fleet_y",
     "lives",
+    "danger_shot_dx",
+    "danger_shot_y",
+    "danger_shot_lane",
+    "pilot_bullet_dx",
+    "pilot_bullet_y",
+    "bee_count",
+    "gunship_count",
+    "boss_count",
 ]
 
 CANVAS_WIDTH = 960.0
@@ -74,10 +82,10 @@ ACTION_DT = 0.12
 DROP_COOLDOWN_SECONDS = 1.08
 ENEMY_SHOT_COOLDOWN_SECONDS = 0.0
 INVALID_DROP_PENALTY = 0.90
-MODEL_SCHEMA_VERSION = 10
+MODEL_SCHEMA_VERSION = 11
 DQN_NET_ARCH = [64, 64]
 MODEL_FILE_DIR = "galagai-models"
-DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai")
+DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v11")
 RETENTION_LATEST_DEFAULT = 12
 
 
@@ -191,6 +199,11 @@ class HeuristicPilotPolicy:
         threat_dx = float(observation[2])
         threat_y = float(observation[3])
         bullet_ready = observation[4] > 0.5
+        danger_dx = float(observation[11]) if len(observation) > 13 else threat_dx
+        danger_y = float(observation[12]) if len(observation) > 13 else threat_y
+        danger_lane = float(observation[13]) if len(observation) > 13 else 0.0
+        if danger_y > 0.44 and danger_lane > 0.20:
+            return 0 if danger_dx >= 0 else 1
         if threat_y > 0.74 and abs(threat_dx) < 0.18:
             return 0 if threat_dx >= 0 else 1
         if bullet_ready and abs(target_dx) < 0.10:
@@ -207,16 +220,33 @@ class HeuristicEnemyPolicy:
         target_dx = float(observation[0])
         drop_ready = observation[7] > 0.5
         fleet_y = float(observation[9])
-        if abs(target_dx) < 0.18:
+        pilot_bullet_dx = float(observation[14]) if len(observation) > 15 else 0.0
+        pilot_bullet_y = float(observation[15]) if len(observation) > 15 else 0.0
+        gunship_count = float(observation[17]) if len(observation) > 17 else 0.0
+        can_fire = gunship_count > 0
+        if pilot_bullet_y > -0.05 and abs(pilot_bullet_dx) < 0.14:
+            return 8 if can_fire else (0 if pilot_bullet_dx >= 0 else 3)
+        if can_fire and abs(target_dx) < 0.18:
             return 5
         if drop_ready and fleet_y < 0.42 and abs(target_dx) > 0.34:
             return 2
-        return 1 if target_dx > 0 else 4
+        if can_fire:
+            return 1 if target_dx > 0 else 4
+        return 0 if target_dx > 0 else 3
 
 
 class OpeningEnemyPolicy:
     def act(self, observation: np.ndarray) -> int:
         target_dx = float(observation[0])
+        drop_ready = observation[7] > 0.5
+        fleet_y = float(observation[9])
+        gunship_count = float(observation[17]) if len(observation) > 17 else 0.0
+        if gunship_count > 0 and abs(target_dx) < 0.24:
+            return 5
+        if gunship_count > 0:
+            return 1 if target_dx > 0 else 4
+        if drop_ready and fleet_y < 0.42 and abs(target_dx) > 0.34:
+            return 2
         return 0 if target_dx > 0 else 3
 
 
@@ -280,16 +310,22 @@ def policy_from_spec(spec: PolicySpec) -> Policy:
 class HeadlessGalagai:
     """Browser-like GalagAI transition loop for RL training."""
 
-    def __init__(self, seed: int = 0, max_steps: int = 520):
+    def __init__(self, seed: int = 0, max_steps: int = 520, max_start_wave: int = 1):
         self.rng = np.random.default_rng(seed)
         self.max_steps = max_steps
+        self.max_start_wave = max(1, int(max_start_wave))
         self.reset(seed=seed)
 
     def reset(self, seed: int | None = None) -> np.ndarray:
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         self.score = 0
-        self.wave = 1
+        self.start_wave = (
+            int(self.rng.integers(1, self.max_start_wave + 1))
+            if self.max_start_wave > 1
+            else 1
+        )
+        self.wave = self.start_wave
         self.lives = 3
         self.steps = 0
         self.ship = Actor(CANVAS_WIDTH / 2.0 - SHIP_WIDTH / 2.0, SHIP_Y, SHIP_WIDTH, SHIP_HEIGHT)
@@ -344,9 +380,28 @@ class HeadlessGalagai:
         target_dx = self._relative_x(target.center_x - ship_center) if target else 0.0
 
         closest_shot = min(self.enemy_shots, key=lambda shot: abs(shot.center_x - ship_center), default=None)
+        danger_shot = self.dangerous_enemy_shot()
+        bullet_threat = self.dangerous_pilot_bullet(live_aliens)
         threat_dx = self._relative_x(closest_shot.center_x - ship_center) if closest_shot else 1.0
         threat_y = self._clamp01(closest_shot.y / CANVAS_HEIGHT) if closest_shot else 0.0
+        danger_dx = self._relative_x(danger_shot.center_x - ship_center) if danger_shot else 1.0
+        danger_y = self._clamp01(danger_shot.y / CANVAS_HEIGHT) if danger_shot else 0.0
+        danger_lane = self.shot_lane_overlap(danger_shot, self.ship) if danger_shot else 0.0
+        if bullet_threat is not None:
+            pilot_bullet, threatened_alien = bullet_threat
+            pilot_bullet_dx = self._relative_x(pilot_bullet.center_x - threatened_alien.center_x)
+            pilot_bullet_y = self._clamp(
+                (pilot_bullet.y - threatened_alien.bottom) / CANVAS_HEIGHT,
+                -1.0,
+                1.0,
+            )
+        else:
+            pilot_bullet_dx = 0.0
+            pilot_bullet_y = 0.0
         fleet_y = self._clamp01(max((alien.y for alien in live_aliens), default=0.0) / CANVAS_HEIGHT)
+        bee_count = sum(1 for alien in live_aliens if alien.role == "bee")
+        gunship_count = sum(1 for alien in live_aliens if alien.role in {"butterfly", "boss"})
+        boss_count = sum(1 for alien in live_aliens if alien.role == "boss")
 
         return np.asarray(
             [
@@ -361,6 +416,14 @@ class HeadlessGalagai:
                 1.0,
                 fleet_y,
                 self._clamp01(self.lives / 3.0),
+                danger_dx,
+                danger_y,
+                danger_lane,
+                pilot_bullet_dx,
+                pilot_bullet_y,
+                self._clamp01(bee_count / MAX_ALIENS_NORMALIZER),
+                self._clamp01(gunship_count / MAX_ALIENS_NORMALIZER),
+                self._clamp01(boss_count / MAX_ALIENS_NORMALIZER),
             ],
             dtype=np.float32,
         )
@@ -385,10 +448,12 @@ class HeadlessGalagai:
         action_features = self.features()
         target_dx = float(action_features[0])
         fleet_y = float(action_features[9])
+        pilot_bullet_dx = float(action_features[14])
+        pilot_bullet_y = float(action_features[15])
         pilot_aligned_action = self.is_pilot_aligned_action(pilot_action, target_dx)
         pilot_aligned_fire = pilot_action == 2 and self.fire_cooldown <= 0 and abs(target_dx) < 0.16
         pilot_bad_fire = pilot_action == 2 and self.fire_cooldown <= 0 and abs(target_dx) > 0.30
-        enemy_tactical_action = self.is_enemy_tactical_action(enemy_action, target_dx, fleet_y)
+        enemy_tactical_action = self.is_enemy_tactical_action(enemy_action, target_dx, fleet_y, pilot_bullet_dx, pilot_bullet_y)
 
         if pilot_action == 0:
             self.ship.x -= SHIP_SPEED * ACTION_DT
@@ -496,6 +561,7 @@ class HeadlessGalagai:
             "events": events,
             "score": self.score,
             "wave": self.wave,
+            "startWave": self.start_wave,
             "lives": self.lives,
             "winner": self.winner(done),
             "dropAttempts": self.drop_attempts,
@@ -529,6 +595,42 @@ class HeadlessGalagai:
         alien = min(live_aliens, key=lambda item: abs(item.center_x - self.ship.center_x))
         self.enemy_shots.append(Shot(alien.center_x - 3.0, alien.bottom, 6.0, 16.0, ENEMY_SHOT_SPEED + self.wave * 20.0))
         return True
+
+    def dangerous_enemy_shot(self) -> Shot | None:
+        if not self.enemy_shots:
+            return None
+        ship_center = self.ship.center_x
+        return max(
+            self.enemy_shots,
+            key=lambda shot: self.shot_lane_overlap(shot, self.ship) * 3.0
+            + self._clamp01(shot.y / CANVAS_HEIGHT)
+            - self._clamp01(max(0.0, self.ship.y - shot.y) / CANVAS_HEIGHT) * 0.35,
+        )
+
+    def dangerous_pilot_bullet(self, live_aliens: list[Actor] | None = None) -> tuple[Shot, Actor] | None:
+        live_aliens = live_aliens if live_aliens is not None else [alien for alien in self.aliens if alien.alive]
+        if not live_aliens or not self.bullets:
+            return None
+        best: tuple[float, Shot, Actor] | None = None
+        for bullet in self.bullets:
+            for alien in live_aliens:
+                if bullet.y + bullet.height < alien.y - 8.0:
+                    continue
+                lane_score = self.shot_lane_overlap(bullet, alien)
+                vertical_gap = abs(bullet.y - alien.bottom)
+                vertical_score = 1.0 - self._clamp01(vertical_gap / CANVAS_HEIGHT)
+                score = lane_score * 3.0 + vertical_score
+                if best is None or score > best[0]:
+                    best = (score, bullet, alien)
+        if best is None:
+            return None
+        return best[1], best[2]
+
+    @staticmethod
+    def shot_lane_overlap(shot: Shot, actor: Actor) -> float:
+        lane_width = max(actor.width * 0.85, actor.width / 2.0 + shot.width / 2.0)
+        distance = abs(shot.center_x - actor.center_x)
+        return max(0.0, min(1.0, 1.0 - distance / lane_width))
 
     def drop_fleet(self) -> None:
         for alien in self.aliens:
@@ -651,7 +753,7 @@ class HeadlessGalagai:
             return "none"
         if self.lives <= 0:
             return "enemies"
-        if self.live_alien_count == 0 or self.wave > 1:
+        if self.live_alien_count == 0 or self.wave > self.start_wave:
             return "pilot"
         return "timeout"
 
@@ -668,7 +770,15 @@ class HeadlessGalagai:
         return False
 
     @staticmethod
-    def is_enemy_tactical_action(action: int, target_dx: float, fleet_y: float) -> bool:
+    def is_enemy_tactical_action(
+        action: int,
+        target_dx: float,
+        fleet_y: float,
+        pilot_bullet_dx: float = 0.0,
+        pilot_bullet_y: float = 0.0,
+    ) -> bool:
+        if pilot_bullet_y > -0.05 and abs(pilot_bullet_dx) < 0.16 and action in {0, 3, 8}:
+            return True
         if action == 0:
             return target_dx > 0.06
         if action == 1:
@@ -709,10 +819,10 @@ class HeadlessGalagai:
 class PilotTrainingEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, opponent: Policy, seed: int = 0, max_steps: int = 520):
+    def __init__(self, opponent: Policy, seed: int = 0, max_steps: int = 520, max_start_wave: int = 1):
         super().__init__()
         self.opponent = opponent
-        self.game = HeadlessGalagai(seed=seed, max_steps=max_steps)
+        self.game = HeadlessGalagai(seed=seed, max_steps=max_steps, max_start_wave=max_start_wave)
         self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(len(FEATURES),), dtype=np.float32)
         self.action_space = spaces.Discrete(len(PILOT_ACTIONS))
         self.seed_value = seed
@@ -733,10 +843,10 @@ class PilotTrainingEnv(gym.Env):
 class EnemyTrainingEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, opponent: Policy, seed: int = 0, max_steps: int = 520):
+    def __init__(self, opponent: Policy, seed: int = 0, max_steps: int = 520, max_start_wave: int = 1):
         super().__init__()
         self.opponent = opponent
-        self.game = HeadlessGalagai(seed=seed, max_steps=max_steps)
+        self.game = HeadlessGalagai(seed=seed, max_steps=max_steps, max_start_wave=max_start_wave)
         self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(len(FEATURES),), dtype=np.float32)
         self.action_space = spaces.Discrete(len(ENEMY_ACTIONS))
         self.seed_value = seed
@@ -778,12 +888,12 @@ def serializable_info(info: dict[str, object]) -> dict[str, object]:
     return sanitized
 
 
-def make_role_env(role: str, opponent_spec: PolicySpec, seed: int, max_steps: int) -> gym.Env:
+def make_role_env(role: str, opponent_spec: PolicySpec, seed: int, max_steps: int, max_start_wave: int = 1) -> gym.Env:
     opponent = policy_from_spec(opponent_spec)
     if role == "pilot":
-        return Monitor(PilotTrainingEnv(opponent, seed=seed, max_steps=max_steps))
+        return Monitor(PilotTrainingEnv(opponent, seed=seed, max_steps=max_steps, max_start_wave=max_start_wave))
     if role == "enemies":
-        return Monitor(EnemyTrainingEnv(opponent, seed=seed, max_steps=max_steps))
+        return Monitor(EnemyTrainingEnv(opponent, seed=seed, max_steps=max_steps, max_start_wave=max_start_wave))
     raise ValueError(f"Unknown training role {role}.")
 
 
@@ -794,10 +904,11 @@ def make_training_env(
     seed: int,
     max_steps: int,
     workers: int,
+    max_start_wave: int = 1,
 ) -> Any:
     worker_count = max(1, int(workers))
     if worker_count == 1:
-        return make_role_env(role, opponent_spec, seed=seed, max_steps=max_steps)
+        return make_role_env(role, opponent_spec, seed=seed, max_steps=max_steps, max_start_wave=max_start_wave)
 
     def make_env(worker_index: int):
         def _init() -> gym.Env:
@@ -806,6 +917,7 @@ def make_training_env(
                 opponent_spec,
                 seed=seed + worker_index * 10_000,
                 max_steps=max_steps,
+                max_start_wave=max_start_wave,
             )
 
         return _init
@@ -1196,6 +1308,7 @@ def train_self_play(
     resume: bool = False,
     train_workers: int = 1,
     eval_workers: int = 1,
+    curriculum_waves: int = 3,
     checkpoint_retention: CheckpointRetention | None = None,
 ) -> tuple[DQN, DQN, dict[str, object]]:
     if timesteps_per_round is not None:
@@ -1204,6 +1317,7 @@ def train_self_play(
         raise ValueError("balanced_rounds must be at least 2 so both roles can get a checkpoint.")
     train_workers = max(1, int(train_workers))
     eval_workers = max(1, int(eval_workers))
+    curriculum_waves = max(1, int(curriculum_waves))
     if balanced_rounds is not None:
         phase_roles = []
     elif generations_per_side is not None:
@@ -1256,6 +1370,7 @@ def train_self_play(
         "rounds": rounds,
         "trainWorkers": train_workers,
         "evalWorkers": eval_workers,
+        "curriculumWaves": curriculum_waves,
         "checkpointRetention": checkpoint_retention.to_json(),
     }
 
@@ -1275,6 +1390,7 @@ def train_self_play(
                 seed=phase_seed,
                 max_steps=max_steps,
                 workers=train_workers,
+                max_start_wave=curriculum_waves,
             )
             try:
                 if pilot_model is None:
@@ -1292,6 +1408,7 @@ def train_self_play(
                 seed=phase_seed,
                 max_steps=max_steps,
                 workers=train_workers,
+                max_start_wave=curriculum_waves,
             )
             try:
                 if enemy_model is None:
@@ -1310,6 +1427,7 @@ def train_self_play(
             eval_episodes=eval_episodes,
             max_steps=max_steps,
             eval_workers=eval_workers,
+            curriculum_waves=curriculum_waves,
         )
         dominance_metric = "pilotWinRate" if trained == "pilot" else "enemyWinRate"
         dominance_reached = float(metrics[dominance_metric]) >= dominance_threshold
@@ -1462,13 +1580,16 @@ def train_self_play(
         "resumedFromCheckpoint": resume,
         "trainWorkers": train_workers,
         "evalWorkers": eval_workers,
+        "curriculumWaves": curriculum_waves,
         "environment": {
             "name": "HeadlessGalagai",
-            "openingEnemyPolicy": "drift-only bootstrap until the first learned enemy checkpoint exists",
+            "openingEnemyPolicy": "role-gated bootstrap: bees drift/drop, butterflies and bosses can shoot after wave one",
+            "curriculumWaves": curriculum_waves,
             "dropCooldownSeconds": DROP_COOLDOWN_SECONDS,
             "enemyShotCooldownSeconds": ENEMY_SHOT_COOLDOWN_SECONDS,
             "actionDtSeconds": ACTION_DT,
             "antiDropSpam": "invalid drops are ignored and penalized",
+            "npcAccessibility": "pilot observes dangerous enemy shots; enemies observe dangerous pilot bullets and role counts",
         },
     }
 
@@ -1481,6 +1602,7 @@ def evaluate_current_matchup(
     eval_episodes: int,
     max_steps: int,
     eval_workers: int = 1,
+    curriculum_waves: int = 1,
 ) -> dict[str, object]:
     return evaluate_policy_specs(
         seed=seed,
@@ -1489,6 +1611,7 @@ def evaluate_current_matchup(
         episodes=eval_episodes,
         max_steps=max_steps,
         workers=eval_workers,
+        curriculum_waves=curriculum_waves,
     )
 
 
@@ -1534,8 +1657,14 @@ def manifest_checkpoint(entry: dict[str, object], url: str) -> dict[str, object]
     } | {"url": url}
 
 
-def run_episode(seed: int, pilot_policy: Policy, enemy_policy: Policy, max_steps: int) -> EpisodeResult:
-    game = HeadlessGalagai(seed=seed, max_steps=max_steps)
+def run_episode(
+    seed: int,
+    pilot_policy: Policy,
+    enemy_policy: Policy,
+    max_steps: int,
+    curriculum_waves: int = 1,
+) -> EpisodeResult:
+    game = HeadlessGalagai(seed=seed, max_steps=max_steps, max_start_wave=curriculum_waves)
     observation = game.reset(seed=seed)
     done = False
     info: dict[str, object] = {}
@@ -1546,7 +1675,7 @@ def run_episode(seed: int, pilot_policy: Policy, enemy_policy: Policy, max_steps
     drop_attempts = max(1, int(info.get("dropAttempts", 0)))
     pilot_fires = int(info.get("pilotFires", 0))
     pilot_hits = int(info.get("pilotHits", 0))
-    wave_cleared = int(info.get("wave", 1)) > 1
+    wave_cleared = int(info.get("wave", 1)) > int(info.get("startWave", 1))
     return EpisodeResult(
         winner=str(info.get("winner", "none")),
         score=int(info.get("score", 0)),
@@ -1564,9 +1693,9 @@ def run_episode(seed: int, pilot_policy: Policy, enemy_policy: Policy, max_steps
     )
 
 
-def run_episode_from_specs(args: tuple[int, PolicySpec, PolicySpec, int]) -> EpisodeResult:
-    seed, pilot_spec, enemy_spec, max_steps = args
-    return run_episode(seed, policy_from_spec(pilot_spec), policy_from_spec(enemy_spec), max_steps)
+def run_episode_from_specs(args: tuple[int, PolicySpec, PolicySpec, int, int]) -> EpisodeResult:
+    seed, pilot_spec, enemy_spec, max_steps, curriculum_waves = args
+    return run_episode(seed, policy_from_spec(pilot_spec), policy_from_spec(enemy_spec), max_steps, curriculum_waves)
 
 
 def evaluate_policy_specs(
@@ -1577,16 +1706,18 @@ def evaluate_policy_specs(
     episodes: int,
     max_steps: int,
     workers: int,
+    curriculum_waves: int = 1,
 ) -> dict[str, object]:
+    curriculum_waves = max(1, int(curriculum_waves))
     if workers > 1 and episodes > 1:
-        tasks = [(seed + episode, pilot_spec, enemy_spec, max_steps) for episode in range(episodes)]
+        tasks = [(seed + episode, pilot_spec, enemy_spec, max_steps, curriculum_waves) for episode in range(episodes)]
         with ProcessPoolExecutor(max_workers=min(workers, episodes)) as executor:
             results = list(executor.map(run_episode_from_specs, tasks))
     else:
         pilot_policy = policy_from_spec(pilot_spec)
         enemy_policy = policy_from_spec(enemy_spec)
         results = [
-            run_episode(seed + episode, pilot_policy, enemy_policy, max_steps)
+            run_episode(seed + episode, pilot_policy, enemy_policy, max_steps, curriculum_waves)
             for episode in range(episodes)
         ]
     return summarize_episode_results(results, episodes)
@@ -1748,6 +1879,12 @@ def main() -> None:
     parser.add_argument("--train-workers", type=int, default=1, help="Parallel headless envs for SB3 rollout collection.")
     parser.add_argument("--eval-workers", type=int, default=1, help="Parallel processes for dominance evaluation episodes.")
     parser.add_argument(
+        "--curriculum-waves",
+        type=int,
+        default=3,
+        help="Randomize episode starts across waves 1..N so pilot/enemy policies train against later enemy roles.",
+    )
+    parser.add_argument(
         "--checkpoint-retention",
         choices=("all", "tiered"),
         default="all",
@@ -1778,6 +1915,7 @@ def main() -> None:
         resume=args.resume,
         train_workers=args.train_workers,
         eval_workers=args.eval_workers,
+        curriculum_waves=args.curriculum_waves,
         checkpoint_retention=retention,
     )
     write_model(args.out, pilot_model, enemy_model, self_play)
@@ -1802,6 +1940,7 @@ def main() -> None:
                 "resumedFromCheckpoint": self_play["resumedFromCheckpoint"],
                 "trainWorkers": self_play["trainWorkers"],
                 "evalWorkers": self_play["evalWorkers"],
+                "curriculumWaves": self_play["curriculumWaves"],
                 "checkpointRetention": self_play["checkpointRetention"],
                 "totalGenerationCounts": self_play["totalGenerationCounts"],
                 "retainedCheckpointCounts": self_play["retainedCheckpointCounts"],

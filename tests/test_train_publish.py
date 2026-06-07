@@ -1,0 +1,68 @@
+import json
+import subprocess
+import tempfile
+import unittest
+from argparse import Namespace
+from pathlib import Path
+from unittest import mock
+
+from tools import train_publish
+
+
+class TrainPublishTest(unittest.TestCase):
+    def _args(self, checkpoint_dir: Path) -> Namespace:
+        return Namespace(
+            checkpoint_dir=checkpoint_dir,
+            min_balanced_rounds=12,
+            balance_tolerance=0.2,
+            balance_patience=3,
+            balance_min_win_rate=0.25,
+            phase_timesteps=900,
+            max_phase_iterations=4,
+            eval_episodes=10,
+            max_steps=360,
+            dominance_threshold=0.65,
+            train_workers=4,
+            eval_workers=4,
+            curriculum_waves=3,
+            checkpoint_retention="tiered",
+            keep_latest_versions=12,
+            model=Path("js/galagai-model.json"),
+            no_resume=True,
+            no_progress=False,
+        )
+
+    def test_default_checkpoint_dir_uses_current_schema_line(self):
+        self.assertEqual(train_publish.DEFAULT_CHECKPOINT_DIR, Path(".training-checkpoints/galagai-balanced-v11"))
+
+    def test_interrupt_exports_recovered_completed_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir) / "checkpoints"
+            checkpoint_dir.mkdir()
+            (checkpoint_dir / "state.json").write_text(
+                json.dumps({"rounds": [{}, {}], "roundNumber": 2}),
+                encoding="utf-8",
+            )
+            args = self._args(checkpoint_dir)
+            calls = []
+
+            def fake_run(command, **_kwargs):
+                calls.append(command)
+                if len(calls) == 1:
+                    raise subprocess.CalledProcessError(-2, command)
+                return ""
+
+            with mock.patch.object(train_publish, "run", side_effect=fake_run):
+                interrupted = train_publish.run_training(args, target_rounds=5, current_rounds=1)
+
+        self.assertTrue(interrupted)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("--resume", calls[1])
+        self.assertIn("--no-progress", calls[1])
+        self.assertIn("--curriculum-waves", calls[1])
+        target_index = calls[1].index("--balanced-rounds")
+        self.assertEqual(calls[1][target_index + 1], "2")
+
+
+if __name__ == "__main__":
+    unittest.main()

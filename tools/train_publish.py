@@ -14,7 +14,7 @@ from typing import Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v10")
+DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v11")
 DEFAULT_MODEL = Path("js/galagai-model.json")
 STATIC_PAGE_PATHS = [
     Path("index.html"),
@@ -98,7 +98,13 @@ def verify_artifacts(model_path: Path, *, skip_tests: bool) -> dict[str, object]
     return summary
 
 
-def build_train_command(args: argparse.Namespace, target_rounds: int) -> list[str]:
+def build_train_command(
+    args: argparse.Namespace,
+    target_rounds: int,
+    *,
+    force_resume: bool = False,
+    force_no_progress: bool = False,
+) -> list[str]:
     command = [
         sys.executable,
         "tools/train_static_pilot.py",
@@ -128,6 +134,8 @@ def build_train_command(args: argparse.Namespace, target_rounds: int) -> list[st
         str(args.train_workers),
         "--eval-workers",
         str(args.eval_workers),
+        "--curriculum-waves",
+        str(args.curriculum_waves),
         "--checkpoint-retention",
         args.checkpoint_retention,
         "--keep-latest-versions",
@@ -135,11 +143,54 @@ def build_train_command(args: argparse.Namespace, target_rounds: int) -> list[st
         "--out",
         str(args.model),
     ]
-    if (args.checkpoint_dir / "state.json").exists() and not args.no_resume:
+    if force_resume or ((args.checkpoint_dir / "state.json").exists() and not args.no_resume):
         command.insert(2, "--resume")
-    if args.no_progress:
+    if args.no_progress or force_no_progress:
         command.append("--no-progress")
     return command
+
+
+def run_training(args: argparse.Namespace, target_rounds: int, current_rounds: int) -> bool:
+    try:
+        run(build_train_command(args, target_rounds))
+        return False
+    except KeyboardInterrupt:
+        interrupted = True
+    except subprocess.CalledProcessError as error:
+        if error.returncode not in {-2, 130}:
+            raise
+        interrupted = True
+
+    if not interrupted:
+        return False
+
+    recovered_rounds = checkpoint_rounds(args.checkpoint_dir)
+    if recovered_rounds <= current_rounds:
+        raise RuntimeError(
+            "Training was interrupted before a new completed generation checkpoint was written. "
+            "Run the same train_publish.py command again to resume."
+        )
+    print(
+        json.dumps(
+            {
+                "trainingInterrupted": True,
+                "recoveredCheckpointRounds": recovered_rounds,
+                "requestedTargetRounds": target_rounds,
+                "action": "exporting and publishing latest completed checkpoint",
+            },
+            indent=2,
+        ),
+        flush=True,
+    )
+    run(
+        build_train_command(
+            args,
+            recovered_rounds,
+            force_resume=True,
+            force_no_progress=True,
+        )
+    )
+    return True
 
 
 def git_has_changes(paths: Sequence[Path] | None = None, *, cached: bool = False, cwd: Path = ROOT) -> bool:
@@ -286,6 +337,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-episodes", type=int, default=10)
     parser.add_argument("--max-steps", type=int, default=360)
     parser.add_argument("--dominance-threshold", type=float, default=0.65)
+    parser.add_argument("--curriculum-waves", type=int, default=3)
     parser.add_argument("--min-balanced-rounds", type=int, default=12)
     parser.add_argument("--balance-tolerance", type=float, default=0.2)
     parser.add_argument("--balance-patience", type=int, default=3)
@@ -313,10 +365,13 @@ def main() -> None:
         raise RuntimeError(f"Target rounds {target_rounds} is behind current checkpoint rounds {current_rounds}.")
 
     print(json.dumps({"currentRounds": current_rounds, "targetRounds": target_rounds}, indent=2), flush=True)
+    interrupted = False
     if not args.no_train:
-        run(build_train_command(args, target_rounds))
+        interrupted = run_training(args, target_rounds, current_rounds)
 
     summary = verify_artifacts(args.model, skip_tests=args.skip_tests)
+    if interrupted:
+        print(json.dumps({"publishedInterruptedCheckpoint": summary}, indent=2), flush=True)
     if not args.no_commit:
         commit_master(summary, no_push=args.no_push)
     if not args.no_pages:
