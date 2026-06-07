@@ -477,6 +477,28 @@ class StaticPilotArtifactTest(unittest.TestCase):
         self.assertEqual(len(self_play["checkpoints"]["enemies"]), 2)
         self.assertEqual(self_play["generationsPerSide"], 2)
 
+    def test_warmup_generations_run_before_balanced_selector(self):
+        _, _, self_play = train_static_pilot.train_self_play(
+            seed=45,
+            balanced_rounds=4,
+            pilot_warmup_generations=3,
+            enemy_warmup_generations=1,
+            phase_timesteps=32,
+            eval_episodes=1,
+            max_steps=40,
+            dominance_threshold=1.1,
+            max_phase_iterations=1,
+        )
+
+        self.assertEqual(
+            [round_info["trained"] for round_info in self_play["rounds"]],
+            ["pilot", "pilot", "pilot", "enemies"],
+        )
+        self.assertEqual(len(self_play["checkpoints"]["pilot"]), 3)
+        self.assertEqual(len(self_play["checkpoints"]["enemies"]), 1)
+        self.assertEqual(self_play["pilotWarmupGenerations"], 3)
+        self.assertEqual(self_play["enemyWarmupGenerations"], 1)
+
     def test_checkpoint_resume_continues_generation_target(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_dir = Path(tmpdir) / "checkpoints"

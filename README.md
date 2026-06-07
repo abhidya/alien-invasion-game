@@ -59,10 +59,41 @@ exports static JSON, prunes retained model files, runs verification, commits and
 pushes `master`, mirrors the same static files to `gh-pages`, and checks the
 public Pages manifest. Use `--target-rounds <n>` instead of `--add-rounds` when
 you want an absolute round target. If you press Ctrl-C after at least one new
-generation checkpoint is complete, the wrapper exports and publishes the latest
-completed checkpoint instead of throwing away the run. The final public Pages
-manifest check retries for several minutes by default; tune it with
-`--public-check-attempts` and `--public-check-delay` if GitHub Pages is slow.
+publishable generation checkpoint is complete, the wrapper exports and publishes
+the latest completed checkpoint instead of throwing away the run. A checkpoint is
+publishable once both a pilot and enemy model exist. Use
+`--publish-interval-seconds 600` for a long run that commits, pushes, mirrors to
+Pages, and resumes about every ten minutes after a completed checkpoint boundary.
+The final public Pages manifest check retries for several minutes by default;
+tune it with `--public-check-attempts` and `--public-check-delay` if GitHub Pages
+is slow.
+
+For a fresh schema/bootstrap run, publish the first three pilot generations plus
+one enemy bootstrap model so the browser manifest can load both sides:
+
+```bash
+python tools/train_publish.py \
+  --target-rounds 4 \
+  --no-resume \
+  --pilot-warmup-generations 3 \
+  --enemy-warmup-generations 1 \
+  --curriculum-waves 3 \
+  --candidate-spawns 2 \
+  --train-workers 1 \
+  --eval-workers 4
+```
+
+After that, keep improving the same checkpoint directory with timed pushes:
+
+```bash
+python tools/train_publish.py \
+  --add-rounds 100000 \
+  --curriculum-waves 3 \
+  --candidate-spawns 2 \
+  --train-workers 1 \
+  --eval-workers 4 \
+  --publish-interval-seconds 600
+```
 
 The RL requirements stay on the newest SB3 line that installs with this Python
 3.12 environment's available torch wheels. At the time of this update, PyPI
@@ -208,7 +239,9 @@ best evaluated model; start with `--candidate-spawns 2 --train-workers 1`, then
 raise spawns if CPU is still idle. Pass `--no-progress` for quiet CI logs.
 Prefer `tools/train_publish.py` for normal model pushes because it applies
 tiered retention, commits `master`, and publishes `gh-pages` in one verified
-workflow.
+workflow. The local resumable SB3 checkpoint state under `.training-checkpoints/`
+is intentionally ignored by git; the pushed checkpoints are the static JSON
+networks under `js/galagai-models/`.
 
 For a future Gymnasium adapter, `alien_invasion/gym_space.py` documents the
 modern `reset` and `step` shape:

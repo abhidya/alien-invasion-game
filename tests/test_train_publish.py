@@ -28,9 +28,19 @@ class TrainPublishTest(unittest.TestCase):
             candidate_spawns=2,
             checkpoint_retention="tiered",
             keep_latest_versions=12,
+            pilot_warmup_generations=0,
+            enemy_warmup_generations=0,
             model=Path("js/galagai-model.json"),
             no_resume=True,
             no_progress=False,
+            skip_tests=True,
+            no_commit=True,
+            no_push=True,
+            no_pages=True,
+            skip_public_check=True,
+            public_check_attempts=1,
+            public_check_delay=0.0,
+            publish_interval_seconds=0.0,
         )
 
     def test_default_checkpoint_dir_uses_current_schema_line(self):
@@ -44,12 +54,24 @@ class TrainPublishTest(unittest.TestCase):
         required_index = command.index("--required-new-balanced-rounds")
         self.assertEqual(command[required_index + 1], "43")
 
+    def test_warmup_generation_flags_are_forwarded_to_trainer(self):
+        args = self._args(Path(".training-checkpoints/galagai-balanced-v14"))
+        args.pilot_warmup_generations = 3
+        args.enemy_warmup_generations = 1
+
+        command = train_publish.build_train_command(args, target_rounds=4, required_new_balanced_rounds=4)
+
+        pilot_index = command.index("--pilot-warmup-generations")
+        enemy_index = command.index("--enemy-warmup-generations")
+        self.assertEqual(command[pilot_index + 1], "3")
+        self.assertEqual(command[enemy_index + 1], "1")
+
     def test_interrupt_exports_recovered_completed_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_dir = Path(tmpdir) / "checkpoints"
             checkpoint_dir.mkdir()
             (checkpoint_dir / "state.json").write_text(
-                json.dumps({"rounds": [{}, {}], "roundNumber": 2}),
+                json.dumps({"rounds": [{}, {}], "roundNumber": 2, "totalGenerationCounts": {"pilot": 1, "enemies": 1}}),
                 encoding="utf-8",
             )
             args = self._args(checkpoint_dir)
@@ -74,6 +96,23 @@ class TrainPublishTest(unittest.TestCase):
         self.assertEqual(calls[1][target_index + 1], "2")
         required_index = calls[1].index("--required-new-balanced-rounds")
         self.assertEqual(calls[1][required_index + 1], "0")
+
+    def test_interrupt_rejects_unpublishable_pilot_only_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir) / "checkpoints"
+            checkpoint_dir.mkdir()
+            (checkpoint_dir / "state.json").write_text(
+                json.dumps({"rounds": [{"trained": "pilot"}], "roundNumber": 1, "totalGenerationCounts": {"pilot": 1, "enemies": 0}}),
+                encoding="utf-8",
+            )
+            args = self._args(checkpoint_dir)
+
+            def fake_run(command, **_kwargs):
+                raise subprocess.CalledProcessError(-2, command)
+
+            with mock.patch.object(train_publish, "run", side_effect=fake_run):
+                with self.assertRaisesRegex(RuntimeError, "nothing publishable"):
+                    train_publish.run_training(args, target_rounds=5, current_rounds=0)
 
     def test_public_manifest_check_retries_until_pages_updates(self):
         expected = {

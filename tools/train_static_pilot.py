@@ -1602,6 +1602,8 @@ def train_self_play(
     balanced_rounds: int | None = None,
     min_balanced_rounds: int = 6,
     required_new_balanced_rounds: int = 0,
+    pilot_warmup_generations: int = 0,
+    enemy_warmup_generations: int = 0,
     balance_tolerance: float = 0.18,
     balance_patience: int = 3,
     balance_min_win_rate: float = 0.25,
@@ -1621,6 +1623,8 @@ def train_self_play(
     if balanced_rounds is not None and balanced_rounds < 2:
         raise ValueError("balanced_rounds must be at least 2 so both roles can get a checkpoint.")
     required_new_balanced_rounds = max(0, int(required_new_balanced_rounds))
+    pilot_warmup_generations = max(0, int(pilot_warmup_generations))
+    enemy_warmup_generations = max(0, int(enemy_warmup_generations))
     train_workers = max(1, int(train_workers))
     eval_workers = max(1, int(eval_workers))
     curriculum_waves = max(1, int(curriculum_waves))
@@ -1672,6 +1676,8 @@ def train_self_play(
         "balancedRounds": balanced_rounds,
         "minBalancedRounds": min_balanced_rounds,
         "requiredNewBalancedRounds": required_new_balanced_rounds,
+        "pilotWarmupGenerations": pilot_warmup_generations,
+        "enemyWarmupGenerations": enemy_warmup_generations,
         "balanceTolerance": balance_tolerance,
         "balancePatience": balance_patience,
         "balanceMinWinRate": balance_min_win_rate,
@@ -1852,8 +1858,14 @@ def train_self_play(
         return dominance_reached
 
     try:
+        phase_number = phase_number_offset
+        while role_generation_count(history, "pilot") < pilot_warmup_generations:
+            phase_number += 1
+            run_generation("pilot", phase_number, 1)
+        while role_generation_count(history, "enemies") < enemy_warmup_generations:
+            phase_number += 1
+            run_generation("enemies", phase_number, 1)
         if balanced_rounds is not None:
-            phase_number = phase_number_offset
             while len(history) < balanced_rounds:
                 if balanced_stop_reached_after_required_rounds(
                     history,
@@ -1947,6 +1959,8 @@ def train_self_play(
         "balancedRounds": balanced_rounds,
         "minBalancedRounds": min_balanced_rounds,
         "requiredNewBalancedRounds": required_new_balanced_rounds,
+        "pilotWarmupGenerations": pilot_warmup_generations,
+        "enemyWarmupGenerations": enemy_warmup_generations,
         "balanceTolerance": balance_tolerance,
         "balancePatience": balance_patience,
         "balanceMinWinRate": balance_min_win_rate,
@@ -2248,6 +2262,18 @@ def main() -> None:
         default=0,
         help="Require this many new balanced generations after resume before the balance stop gate can end training.",
     )
+    parser.add_argument(
+        "--pilot-warmup-generations",
+        type=int,
+        default=0,
+        help="Train this many pilot generations before adaptive balanced training.",
+    )
+    parser.add_argument(
+        "--enemy-warmup-generations",
+        type=int,
+        default=0,
+        help="Train this many enemy generations before adaptive balanced training.",
+    )
     parser.add_argument("--balance-tolerance", type=float, default=0.18)
     parser.add_argument("--balance-patience", type=int, default=3)
     parser.add_argument("--balance-min-win-rate", type=float, default=0.25)
@@ -2297,6 +2323,8 @@ def main() -> None:
         balanced_rounds=args.balanced_rounds,
         min_balanced_rounds=args.min_balanced_rounds,
         required_new_balanced_rounds=args.required_new_balanced_rounds,
+        pilot_warmup_generations=args.pilot_warmup_generations,
+        enemy_warmup_generations=args.enemy_warmup_generations,
         balance_tolerance=args.balance_tolerance,
         balance_patience=args.balance_patience,
         balance_min_win_rate=args.balance_min_win_rate,
@@ -2323,6 +2351,8 @@ def main() -> None:
                 "balancedRounds": self_play["balancedRounds"],
                 "minBalancedRounds": self_play["minBalancedRounds"],
                 "requiredNewBalancedRounds": self_play["requiredNewBalancedRounds"],
+                "pilotWarmupGenerations": self_play["pilotWarmupGenerations"],
+                "enemyWarmupGenerations": self_play["enemyWarmupGenerations"],
                 "balanceTolerance": self_play["balanceTolerance"],
                 "balancePatience": self_play["balancePatience"],
                 "balanceMinWinRate": self_play["balanceMinWinRate"],

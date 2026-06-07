@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -41,6 +43,25 @@ def checkpoint_rounds(checkpoint_dir: Path) -> int:
     state = json.loads(state_path.read_text(encoding="utf-8"))
     rounds = state.get("rounds", [])
     return len(rounds) if isinstance(rounds, list) else int(state.get("roundNumber", 0))
+
+
+def checkpoint_generation_counts(checkpoint_dir: Path) -> dict[str, int]:
+    state_path = checkpoint_dir / "state.json"
+    if not state_path.exists():
+        return {"pilot": 0, "enemies": 0}
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    counts = state.get("totalGenerationCounts")
+    if not isinstance(counts, dict):
+        counts = state.get("checkpointCounts", {})
+    return {
+        "pilot": int(counts.get("pilot", 0)) if isinstance(counts, dict) else 0,
+        "enemies": int(counts.get("enemies", 0)) if isinstance(counts, dict) else 0,
+    }
+
+
+def checkpoint_is_publishable(checkpoint_dir: Path) -> bool:
+    counts = checkpoint_generation_counts(checkpoint_dir)
+    return counts["pilot"] > 0 and counts["enemies"] > 0
 
 
 def load_manifest(model_path: Path) -> dict[str, object]:
@@ -117,6 +138,10 @@ def build_train_command(
         str(args.min_balanced_rounds),
         "--required-new-balanced-rounds",
         str(max(0, required_new_balanced_rounds)),
+        "--pilot-warmup-generations",
+        str(args.pilot_warmup_generations),
+        "--enemy-warmup-generations",
+        str(args.enemy_warmup_generations),
         "--balance-tolerance",
         str(args.balance_tolerance),
         "--balance-patience",
@@ -186,6 +211,13 @@ def run_training(
             "Training was interrupted before a new completed generation checkpoint was written. "
             "Run the same train_publish.py command again to resume."
         )
+    if not checkpoint_is_publishable(args.checkpoint_dir):
+        counts = checkpoint_generation_counts(args.checkpoint_dir)
+        raise RuntimeError(
+            "Training was interrupted before both pilot and enemy checkpoints existed, so there is "
+            f"nothing publishable yet. Current generations: {counts}. "
+            "Run the same train_publish.py command again to resume."
+        )
     print(
         json.dumps(
             {
@@ -207,6 +239,172 @@ def run_training(
             force_no_progress=True,
         )
     )
+    return True
+
+
+def stop_process_group(process: subprocess.Popen[object], *, timeout_seconds: float = 180.0) -> int:
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGINT)
+    except ProcessLookupError:
+        pass
+    try:
+        return int(process.wait(timeout=timeout_seconds))
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            return int(process.wait(timeout=30))
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            return int(process.wait())
+
+
+def publish_current_artifacts(args: argparse.Namespace, *, interrupted: bool = False) -> dict[str, object]:
+    summary = verify_artifacts(args.model, skip_tests=args.skip_tests)
+    if interrupted:
+        print(json.dumps({"publishedInterruptedCheckpoint": summary}, indent=2), flush=True)
+    if not args.no_commit:
+        commit_master(summary, no_push=args.no_push)
+    if not args.no_pages:
+        publish_pages(summary, no_push=args.no_push)
+    if not args.skip_public_check and not args.no_push and not args.no_pages:
+        public_manifest_check(
+            summary,
+            attempts=args.public_check_attempts,
+            delay_seconds=args.public_check_delay,
+        )
+    return summary
+
+
+def export_completed_checkpoint(args: argparse.Namespace, recovered_rounds: int) -> None:
+    run(
+        build_train_command(
+            args,
+            recovered_rounds,
+            required_new_balanced_rounds=0,
+            force_resume=True,
+            force_no_progress=True,
+        )
+    )
+
+
+def run_training_with_publish_interval(
+    args: argparse.Namespace,
+    target_rounds: int,
+    current_rounds: int,
+    *,
+    required_new_balanced_rounds: int,
+) -> bool:
+    interval_seconds = max(1.0, float(args.publish_interval_seconds))
+    current_rounds = max(0, int(current_rounds))
+    required_new_balanced_rounds = max(0, int(required_new_balanced_rounds))
+    while current_rounds < target_rounds:
+        command = build_train_command(
+            args,
+            target_rounds,
+            required_new_balanced_rounds=required_new_balanced_rounds,
+            force_resume=current_rounds > 0,
+        )
+        print("+", " ".join(command), flush=True)
+        process: subprocess.Popen[object] = subprocess.Popen(command, cwd=ROOT, start_new_session=True)
+        started_at = time.monotonic()
+        publish_due_logged = False
+        try:
+            while True:
+                returncode = process.poll()
+                recovered_rounds = checkpoint_rounds(args.checkpoint_dir)
+                if returncode is not None:
+                    if returncode != 0:
+                        if returncode in {-signal.SIGINT, 130} and recovered_rounds > current_rounds:
+                            if not checkpoint_is_publishable(args.checkpoint_dir):
+                                raise RuntimeError(
+                                    "Training stopped before both pilot and enemy checkpoints existed, "
+                                    "so the latest checkpoint cannot be published yet."
+                                )
+                            export_completed_checkpoint(args, recovered_rounds)
+                            publish_current_artifacts(args, interrupted=True)
+                            return False
+                        raise subprocess.CalledProcessError(returncode, command)
+                    return True
+
+                elapsed = time.monotonic() - started_at
+                if elapsed >= interval_seconds and recovered_rounds > current_rounds:
+                    if not checkpoint_is_publishable(args.checkpoint_dir):
+                        if not publish_due_logged:
+                            print(
+                                json.dumps(
+                                    {
+                                        "publishDue": True,
+                                        "action": "waiting for both pilot and enemy checkpoints before publishing",
+                                        "checkpointGenerations": checkpoint_generation_counts(args.checkpoint_dir),
+                                    },
+                                    indent=2,
+                                ),
+                                flush=True,
+                            )
+                            publish_due_logged = True
+                        time.sleep(5)
+                        continue
+                    print(
+                        json.dumps(
+                            {
+                                "publishDue": True,
+                                "elapsedSeconds": round(elapsed, 2),
+                                "previousCheckpointRounds": current_rounds,
+                                "recoveredCheckpointRounds": recovered_rounds,
+                                "action": "stopping trainer, exporting latest checkpoint, committing, pushing, then resuming",
+                            },
+                            indent=2,
+                        ),
+                        flush=True,
+                    )
+                    returncode = stop_process_group(process)
+                    if returncode not in {0, -signal.SIGINT, 130}:
+                        raise subprocess.CalledProcessError(returncode, command)
+                    recovered_rounds = checkpoint_rounds(args.checkpoint_dir)
+                    export_completed_checkpoint(args, recovered_rounds)
+                    publish_current_artifacts(args, interrupted=True)
+                    current_rounds = recovered_rounds
+                    required_new_balanced_rounds = max(0, target_rounds - current_rounds)
+                    break
+
+                if elapsed >= interval_seconds and not publish_due_logged:
+                    print(
+                        json.dumps(
+                            {
+                                "publishDue": True,
+                                "action": "waiting for the next completed generation checkpoint",
+                                "previousCheckpointRounds": current_rounds,
+                            },
+                            indent=2,
+                        ),
+                        flush=True,
+                    )
+                    publish_due_logged = True
+                time.sleep(5)
+        except KeyboardInterrupt:
+            returncode = stop_process_group(process)
+            recovered_rounds = checkpoint_rounds(args.checkpoint_dir)
+            if returncode not in {0, -signal.SIGINT, 130}:
+                raise subprocess.CalledProcessError(returncode, command)
+            if recovered_rounds <= current_rounds:
+                raise RuntimeError(
+                    "Training was interrupted before a new completed generation checkpoint was written. "
+                    "Run the same train_publish.py command again to resume."
+                )
+            if not checkpoint_is_publishable(args.checkpoint_dir):
+                raise RuntimeError(
+                    "Training was interrupted before both pilot and enemy checkpoints existed, so there is "
+                    "nothing publishable yet. Run the same train_publish.py command again to resume."
+                )
+            export_completed_checkpoint(args, recovered_rounds)
+            publish_current_artifacts(args, interrupted=True)
+            return False
     return True
 
 
@@ -363,6 +561,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--curriculum-waves", type=int, default=3)
     parser.add_argument("--candidate-spawns", type=int, default=1)
     parser.add_argument("--min-balanced-rounds", type=int, default=12)
+    parser.add_argument("--pilot-warmup-generations", type=int, default=0, help="Train this many pilot generations before adaptive balanced training.")
+    parser.add_argument("--enemy-warmup-generations", type=int, default=0, help="Train this many enemy generations before adaptive balanced training.")
     parser.add_argument("--balance-tolerance", type=float, default=0.2)
     parser.add_argument("--balance-patience", type=int, default=3)
     parser.add_argument("--balance-min-win-rate", type=float, default=0.25)
@@ -373,6 +573,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--no-train", action="store_true", help="Only verify/commit/publish current model files.")
+    parser.add_argument(
+        "--publish-interval-seconds",
+        type=float,
+        default=0.0,
+        help="When positive, interrupt after this many seconds once a new checkpoint exists, publish it, and resume training.",
+    )
     parser.add_argument("--skip-tests", action="store_true")
     parser.add_argument("--no-commit", action="store_true")
     parser.add_argument("--no-push", action="store_true")
@@ -404,26 +610,24 @@ def main() -> None:
     )
     interrupted = False
     if not args.no_train:
-        interrupted = run_training(
-            args,
-            target_rounds,
-            current_rounds,
-            required_new_balanced_rounds=required_new_balanced_rounds,
-        )
+        if args.publish_interval_seconds > 0:
+            should_publish_final = run_training_with_publish_interval(
+                args,
+                target_rounds,
+                current_rounds,
+                required_new_balanced_rounds=required_new_balanced_rounds,
+            )
+            if not should_publish_final:
+                return
+        else:
+            interrupted = run_training(
+                args,
+                target_rounds,
+                current_rounds,
+                required_new_balanced_rounds=required_new_balanced_rounds,
+            )
 
-    summary = verify_artifacts(args.model, skip_tests=args.skip_tests)
-    if interrupted:
-        print(json.dumps({"publishedInterruptedCheckpoint": summary}, indent=2), flush=True)
-    if not args.no_commit:
-        commit_master(summary, no_push=args.no_push)
-    if not args.no_pages:
-        publish_pages(summary, no_push=args.no_push)
-    if not args.skip_public_check and not args.no_push and not args.no_pages:
-        public_manifest_check(
-            summary,
-            attempts=args.public_check_attempts,
-            delay_seconds=args.public_check_delay,
-        )
+    publish_current_artifacts(args, interrupted=interrupted)
 
 
 if __name__ == "__main__":
