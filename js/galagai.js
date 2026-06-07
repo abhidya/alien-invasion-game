@@ -20,6 +20,12 @@
     pilotWinRate: document.getElementById("pilot-win-rate"),
     enemyPressure: document.getElementById("enemy-pressure")
   };
+  var versionNodes = {
+    pilotSlider: document.getElementById("pilot-version"),
+    pilotLabel: document.getElementById("pilot-version-label"),
+    enemySlider: document.getElementById("enemy-version"),
+    enemyLabel: document.getElementById("enemy-version-label")
+  };
 
   var assets = {
     ship: loadImage("alien_invasion/images/ship1.png"),
@@ -34,6 +40,10 @@
   var pilot = false;
   var pilotModel = null;
   var enemyModel = null;
+  var pilotVersions = [];
+  var enemyVersions = [];
+  var activePilotVersion = 0;
+  var activeEnemyVersion = 0;
   var enemyAction = "hold";
   var lastTime = 0;
   var fireCooldown = 0;
@@ -61,15 +71,18 @@
       })
       .then(function (model) {
         if (!isUsableModel(model)) return;
-        pilotModel = model;
-        enemyModel = isUsableModel(model.enemies)
-          ? model.enemies
-          : null;
+        pilotVersions = extractPilotVersions(model);
+        enemyVersions = extractEnemyVersions(model);
+        activePilotVersion = Math.max(0, pilotVersions.length - 1);
+        activeEnemyVersion = Math.max(0, enemyVersions.length - 1);
+        applySelectedVersions();
         updateHud();
       })
       .catch(function () {
         pilotModel = null;
         enemyModel = null;
+        pilotVersions = [];
+        enemyVersions = [];
         updateHud();
       });
   }
@@ -80,6 +93,48 @@
       Array.isArray(model.actions) &&
       (Array.isArray(model.weights) || (model.network && Array.isArray(model.network.layers)))
     );
+  }
+
+  function extractPilotVersions(model) {
+    var versions = model.versions && Array.isArray(model.versions.pilot)
+      ? model.versions.pilot.filter(isUsableModel)
+      : [];
+    if (versions.length) return versions;
+    return [model];
+  }
+
+  function extractEnemyVersions(model) {
+    var versions = model.versions && Array.isArray(model.versions.enemies)
+      ? model.versions.enemies.filter(isUsableModel)
+      : [];
+    if (versions.length) return versions;
+    return isUsableModel(model.enemies) ? [model.enemies] : [];
+  }
+
+  function applySelectedVersions() {
+    pilotModel = pilotVersions[activePilotVersion] || null;
+    enemyModel = enemyVersions[activeEnemyVersion] || null;
+    configureVersionSlider(versionNodes.pilotSlider, pilotVersions, activePilotVersion);
+    configureVersionSlider(versionNodes.enemySlider, enemyVersions, activeEnemyVersion);
+  }
+
+  function configureVersionSlider(slider, versions, activeIndex) {
+    if (!slider) return;
+    slider.min = versions.length ? "1" : "0";
+    slider.max = String(Math.max(versions.length, 1));
+    slider.value = versions.length ? String(activeIndex + 1) : "0";
+    slider.disabled = versions.length <= 1;
+  }
+
+  function selectVersion(kind, value) {
+    var index = Math.max(0, Number(value || 1) - 1);
+    if (kind === "pilot") {
+      activePilotVersion = Math.min(index, Math.max(0, pilotVersions.length - 1));
+    } else {
+      activeEnemyVersion = Math.min(index, Math.max(0, enemyVersions.length - 1));
+    }
+    applySelectedVersions();
+    updateHud();
   }
 
   function createInitialState() {
@@ -160,18 +215,45 @@
   }
 
   function updateCheckpointPanel() {
-    var metrics = pilotModel && pilotModel.metrics ? pilotModel.metrics : null;
+    var metrics = modelMetrics(pilotModel);
     var selfPlay = metrics && metrics.selfPlay ? metrics.selfPlay : null;
     var latest = selfPlay && selfPlay.latest ? selfPlay.latest : null;
 
-    checkpointNodes.modelName.textContent = pilotModel ? pilotModel.model : "heuristic";
-    checkpointNodes.enemyModelName.textContent = enemyModel ? enemyModel.model : "scripted";
+    checkpointNodes.modelName.textContent = pilotModel ? modelLabel(pilotModel) : "heuristic";
+    checkpointNodes.enemyModelName.textContent = enemyModel ? modelLabel(enemyModel) : "scripted";
     checkpointNodes.evalAccuracy.textContent = metrics ? percent(metrics.evalAccuracy) : "--";
     checkpointNodes.selfPlayRound.textContent = latest ? latest.round : "--";
     checkpointNodes.trainedSide.textContent = latest ? latest.trained : "--";
     checkpointNodes.enemyAction.textContent = enemyModel ? enemyAction : "--";
     checkpointNodes.pilotWinRate.textContent = latest ? percent(latest.enemyWinRate) : "--";
     checkpointNodes.enemyPressure.textContent = latest ? percent(latest.enemyDropRate) : "--";
+    if (versionNodes.pilotLabel) {
+      versionNodes.pilotLabel.textContent = pilotModel ? versionLabel(pilotModel, activePilotVersion, pilotVersions.length) : "none";
+    }
+    if (versionNodes.enemyLabel) {
+      versionNodes.enemyLabel.textContent = enemyModel ? versionLabel(enemyModel, activeEnemyVersion, enemyVersions.length) : "none";
+    }
+  }
+
+  function modelMetrics(model) {
+    if (!model) return null;
+    if (model.metrics) return model.metrics;
+    return {
+      evalAccuracy: Number(model.pilotWinRate || 0),
+      enemyWinRate: Number(model.enemyWinRate || 0),
+      enemyDropRate: Number(model.enemyDropRate || 0),
+      invalidDropRate: Number(model.invalidDropRate || 0),
+      enemyFireRate: Number(model.enemyFireRate || 0),
+      selfPlay: { latest: model }
+    };
+  }
+
+  function modelLabel(model) {
+    return model.label || model.model || "checkpoint";
+  }
+
+  function versionLabel(model, activeIndex, count) {
+    return modelLabel(model) + " (" + (activeIndex + 1) + "/" + Math.max(count, 1) + ")";
   }
 
   function percent(value) {
@@ -232,7 +314,7 @@
 
   function predictModelAction(model, fallback) {
     if (!model) return fallback;
-    var features = pilotFeatures();
+    var features = modelFeatures(model);
     var scores = model.network ? evaluateNetwork(model.network, features) : null;
     var bestAction = fallback;
     var bestScoreForAction = -Infinity;
@@ -248,6 +330,12 @@
       }
     });
     return bestAction;
+  }
+
+  function modelFeatures(model) {
+    var features = pilotFeatures();
+    var expected = Array.isArray(model.features) ? model.features.length : features.length;
+    return features.slice(0, expected);
   }
 
   function evaluateNetwork(network, features) {
@@ -314,7 +402,6 @@
     var threatY = closestShot ? clamp(closestShot.y / canvas.height, 0, 1) : 0;
 
     return [
-      1,
       targetDx,
       Math.abs(targetDx),
       threatDx,
@@ -580,6 +667,16 @@
     pilot = !pilot;
     updateHud();
   });
+  if (versionNodes.pilotSlider) {
+    versionNodes.pilotSlider.addEventListener("input", function (event) {
+      selectVersion("pilot", event.target.value);
+    });
+  }
+  if (versionNodes.enemySlider) {
+    versionNodes.enemySlider.addEventListener("input", function (event) {
+      selectVersion("enemies", event.target.value);
+    });
+  }
 
   requestAnimationFrame(function (now) {
     lastTime = now;
