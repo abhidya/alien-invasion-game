@@ -78,6 +78,26 @@ MODEL_SCHEMA_VERSION = 10
 DQN_NET_ARCH = [64, 64]
 MODEL_FILE_DIR = "galagai-models"
 DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai")
+RETENTION_LATEST_DEFAULT = 12
+
+
+@dataclass(frozen=True)
+class CheckpointRetention:
+    mode: str = "all"
+    keep_latest: int = RETENTION_LATEST_DEFAULT
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"all", "tiered"}:
+            raise ValueError("checkpoint retention mode must be 'all' or 'tiered'.")
+        if self.keep_latest < 1:
+            raise ValueError("keep_latest must be at least 1.")
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "mode": self.mode,
+            "keepLatest": self.keep_latest,
+            "tieredRule": "keep generation 1, latest N, every 2 through 100, every 10 through 1000, every 100 after",
+        }
 
 
 @dataclass
@@ -938,11 +958,62 @@ def choose_balanced_role(
     return "pilot" if pilot_win_rate <= enemy_win_rate else "enemies"
 
 
+def role_generation_count(history: list[dict[str, object]], role: str) -> int:
+    return sum(1 for entry in history if entry.get("trained") == role)
+
+
+def generation_counts(history: list[dict[str, object]]) -> dict[str, int]:
+    return {
+        "pilot": role_generation_count(history, "pilot"),
+        "enemies": role_generation_count(history, "enemies"),
+    }
+
+
+def retained_generation_ids(max_generation: int, retention: CheckpointRetention) -> set[int]:
+    if max_generation <= 0:
+        return set()
+    if retention.mode == "all":
+        return set(range(1, max_generation + 1))
+
+    latest_start = max(1, max_generation - retention.keep_latest + 1)
+    retained = {1, max_generation, *range(latest_start, max_generation + 1)}
+    for generation in range(1, max_generation + 1):
+        if generation <= 100 and generation % 2 == 0:
+            retained.add(generation)
+        elif generation <= 1000 and generation % 10 == 0:
+            retained.add(generation)
+        elif generation % 100 == 0:
+            retained.add(generation)
+    return retained
+
+
+def retain_checkpoint_entries(
+    entries: list[dict[str, object]],
+    retention: CheckpointRetention,
+) -> list[dict[str, object]]:
+    if retention.mode == "all" or not entries:
+        return list(entries)
+    max_generation = max(int(entry["id"]) for entry in entries)
+    retained_ids = retained_generation_ids(max_generation, retention)
+    return [entry for entry in entries if int(entry["id"]) in retained_ids]
+
+
+def retain_checkpoint_sets(
+    checkpoints: dict[str, list[dict[str, object]]],
+    retention: CheckpointRetention,
+) -> dict[str, list[dict[str, object]]]:
+    return {
+        "pilot": retain_checkpoint_entries(checkpoints.get("pilot", []), retention),
+        "enemies": retain_checkpoint_entries(checkpoints.get("enemies", []), retention),
+    }
+
+
 class TrainingCheckpointStore:
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, retention: CheckpointRetention | None = None):
         self.directory = directory
         self.exports_dir = directory / "exports"
         self.state_path = directory / "state.json"
+        self.retention = retention or CheckpointRetention()
 
     def has_state(self) -> bool:
         return self.state_path.exists()
@@ -986,15 +1057,22 @@ class TrainingCheckpointStore:
         if enemy_model is not None:
             self._save_role_model("enemies", enemy_model)
 
+        retained_checkpoints = retain_checkpoint_sets(checkpoints, self.retention)
         checkpoint_files: dict[str, list[str]] = {"pilot": [], "enemies": []}
         for role in ("pilot", "enemies"):
-            entries = checkpoints.get(role, [])
+            entries = retained_checkpoints.get(role, [])
+            retained_filenames = set()
             for entry in entries:
                 filename = checkpoint_filename(role, int(entry["id"]))
                 entry_path = self.exports_dir / filename
+                retained_filenames.add(filename)
                 checkpoint_files[role].append(filename)
-                if not entry_path.exists() or int(entry["id"]) == len(entries):
+                if not entry_path.exists() or int(entry["id"]) == max(int(item["id"]) for item in entries):
                     self._write_json_atomic(entry_path, entry)
+            prefix = "pilot" if role == "pilot" else "enemies"
+            for stale_path in self.exports_dir.glob(f"{prefix}-v*.json"):
+                if stale_path.name not in retained_filenames:
+                    stale_path.unlink()
 
         state = {
             "schemaVersion": MODEL_SCHEMA_VERSION,
@@ -1005,9 +1083,11 @@ class TrainingCheckpointStore:
             "roundNumber": round_number,
             "phaseNumber": phase_number,
             "checkpointCounts": {
-                "pilot": len(checkpoints.get("pilot", [])),
-                "enemies": len(checkpoints.get("enemies", [])),
+                "pilot": len(retained_checkpoints.get("pilot", [])),
+                "enemies": len(retained_checkpoints.get("enemies", [])),
             },
+            "totalGenerationCounts": generation_counts(history),
+            "checkpointRetention": self.retention.to_json(),
             "checkpointFiles": checkpoint_files,
             "rounds": history,
             "config": config,
@@ -1116,6 +1196,7 @@ def train_self_play(
     resume: bool = False,
     train_workers: int = 1,
     eval_workers: int = 1,
+    checkpoint_retention: CheckpointRetention | None = None,
 ) -> tuple[DQN, DQN, dict[str, object]]:
     if timesteps_per_round is not None:
         phase_timesteps = timesteps_per_round
@@ -1139,7 +1220,8 @@ def train_self_play(
     checkpoints: dict[str, list[dict[str, object]]] = {"pilot": [], "enemies": []}
     round_number = 0
     phase_number_offset = 0
-    checkpoint_store = TrainingCheckpointStore(checkpoint_dir) if checkpoint_dir is not None else None
+    checkpoint_retention = checkpoint_retention or CheckpointRetention()
+    checkpoint_store = TrainingCheckpointStore(checkpoint_dir, checkpoint_retention) if checkpoint_dir is not None else None
     if resume:
         if checkpoint_store is None:
             raise RuntimeError("--resume requires checkpoint_dir.")
@@ -1147,7 +1229,7 @@ def train_self_play(
         pilot_model = loaded.pilot_model
         enemy_model = loaded.enemy_model
         history = loaded.history
-        checkpoints = loaded.checkpoints
+        checkpoints = retain_checkpoint_sets(loaded.checkpoints, checkpoint_retention)
         round_number = loaded.round_number
         phase_number_offset = loaded.phase_number
 
@@ -1174,12 +1256,16 @@ def train_self_play(
         "rounds": rounds,
         "trainWorkers": train_workers,
         "evalWorkers": eval_workers,
+        "checkpointRetention": checkpoint_retention.to_json(),
     }
 
+    current_phase_number = phase_number_offset
+
     def run_generation(role: str, phase_number: int, phase_iteration: int) -> bool:
-        nonlocal pilot_model, enemy_model, round_number
+        nonlocal pilot_model, enemy_model, round_number, checkpoints, current_phase_number
 
         round_number += 1
+        current_phase_number = phase_number
         phase_seed = seed + phase_number * 1000 + phase_iteration * 97
         env = None
         if role == "pilot":
@@ -1227,12 +1313,13 @@ def train_self_play(
         )
         dominance_metric = "pilotWinRate" if trained == "pilot" else "enemyWinRate"
         dominance_reached = float(metrics[dominance_metric]) >= dominance_threshold
+        generation = role_generation_count(history, trained) + 1
         round_metrics = {
             "round": round_number,
             "phase": phase_number,
             "phaseIteration": phase_iteration,
             "trained": trained,
-            "generation": len(checkpoints[trained]) + 1,
+            "generation": generation,
             "dominanceMetric": dominance_metric,
             "dominanceThreshold": dominance_threshold,
             "dominanceReached": dominance_reached,
@@ -1245,7 +1332,7 @@ def train_self_play(
                 checkpoint_entry(
                     role="pilot",
                     model=pilot_model,
-                    version_id=len(checkpoints["pilot"]) + 1,
+                    version_id=generation,
                     metrics=round_metrics,
                 )
             )
@@ -1254,10 +1341,11 @@ def train_self_play(
                 checkpoint_entry(
                     role="enemies",
                     model=enemy_model,
-                    version_id=len(checkpoints["enemies"]) + 1,
+                    version_id=generation,
                     metrics=round_metrics,
                 )
             )
+        checkpoints = retain_checkpoint_sets(checkpoints, checkpoint_retention)
         if checkpoint_store is not None:
             checkpoint_store.save(
                 pilot_model=pilot_model,
@@ -1268,7 +1356,8 @@ def train_self_play(
                 phase_number=phase_number,
                 config=checkpoint_config,
             )
-        progress_tracker.update(round_metrics, len(checkpoints["pilot"]), len(checkpoints["enemies"]))
+        totals = generation_counts(history)
+        progress_tracker.update(round_metrics, totals["pilot"], totals["enemies"])
         return dominance_reached
 
     try:
@@ -1305,18 +1394,22 @@ def train_self_play(
                         break
         elif generations_per_side is not None:
             phase_number = phase_number_offset
-            role = "pilot" if len(checkpoints["pilot"]) <= len(checkpoints["enemies"]) else "enemies"
-            while len(checkpoints["pilot"]) < generations_per_side or len(checkpoints["enemies"]) < generations_per_side:
-                if len(checkpoints[role]) >= generations_per_side:
+            totals = generation_counts(history)
+            role = "pilot" if totals["pilot"] <= totals["enemies"] else "enemies"
+            while totals["pilot"] < generations_per_side or totals["enemies"] < generations_per_side:
+                totals = generation_counts(history)
+                if totals[role] >= generations_per_side:
                     role = "enemies" if role == "pilot" else "pilot"
                     continue
                 phase_number += 1
                 for phase_iteration in range(1, max_phase_iterations + 1):
-                    if len(checkpoints[role]) >= generations_per_side:
+                    totals = generation_counts(history)
+                    if totals[role] >= generations_per_side:
                         break
                     dominance_reached = run_generation(role, phase_number, phase_iteration)
                     if dominance_reached:
                         break
+                totals = generation_counts(history)
                 role = "enemies" if role == "pilot" else "pilot"
         else:
             remaining_phase_roles = phase_roles[round_number:] if rounds is not None else phase_roles[phase_number_offset:]
@@ -1331,11 +1424,29 @@ def train_self_play(
     if pilot_model is None or enemy_model is None:
         raise RuntimeError("Training requires at least one pilot phase and one enemy phase.")
 
+    checkpoints = retain_checkpoint_sets(checkpoints, checkpoint_retention)
+    if checkpoint_store is not None and checkpoint_retention.mode != "all":
+        checkpoint_store.save(
+            pilot_model=pilot_model,
+            enemy_model=enemy_model,
+            history=history,
+            checkpoints=checkpoints,
+            round_number=round_number,
+            phase_number=current_phase_number,
+            config=checkpoint_config,
+        )
+
     return pilot_model, enemy_model, {
         "type": "stable-baselines3-dqn-galagAI-dominance-self-play",
         "rounds": history,
         "latest": history[-1],
         "checkpoints": checkpoints,
+        "retainedCheckpointCounts": {
+            "pilot": len(checkpoints["pilot"]),
+            "enemies": len(checkpoints["enemies"]),
+        },
+        "totalGenerationCounts": generation_counts(history),
+        "checkpointRetention": checkpoint_retention.to_json(),
         "cycles": cycles,
         "generationsPerSide": generations_per_side,
         "balancedRounds": balanced_rounds,
@@ -1636,7 +1747,15 @@ def main() -> None:
     parser.add_argument("--no-checkpoints", action="store_true", help="Disable per-generation trainer checkpoints.")
     parser.add_argument("--train-workers", type=int, default=1, help="Parallel headless envs for SB3 rollout collection.")
     parser.add_argument("--eval-workers", type=int, default=1, help="Parallel processes for dominance evaluation episodes.")
+    parser.add_argument(
+        "--checkpoint-retention",
+        choices=("all", "tiered"),
+        default="all",
+        help="Which exported checkpoint JSON files to keep. 'tiered' keeps latest N, every 2 through 100, every 10 through 1000, and every 100 after.",
+    )
+    parser.add_argument("--keep-latest-versions", type=int, default=RETENTION_LATEST_DEFAULT)
     args = parser.parse_args()
+    retention = CheckpointRetention(mode=args.checkpoint_retention, keep_latest=args.keep_latest_versions)
 
     pilot_model, enemy_model, self_play = train_self_play(
         seed=args.seed,
@@ -1659,6 +1778,7 @@ def main() -> None:
         resume=args.resume,
         train_workers=args.train_workers,
         eval_workers=args.eval_workers,
+        checkpoint_retention=retention,
     )
     write_model(args.out, pilot_model, enemy_model, self_play)
     summary = artifact_summary(args.out)
@@ -1682,6 +1802,9 @@ def main() -> None:
                 "resumedFromCheckpoint": self_play["resumedFromCheckpoint"],
                 "trainWorkers": self_play["trainWorkers"],
                 "evalWorkers": self_play["evalWorkers"],
+                "checkpointRetention": self_play["checkpointRetention"],
+                "totalGenerationCounts": self_play["totalGenerationCounts"],
+                "retainedCheckpointCounts": self_play["retainedCheckpointCounts"],
                 "roundsCompleted": len(self_play["rounds"]),
                 "checkpointCounts": {
                     "pilot": len(self_play["checkpoints"]["pilot"]),

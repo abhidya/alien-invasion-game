@@ -152,6 +152,46 @@ class StaticPilotArtifactTest(unittest.TestCase):
             )
         )
 
+    def test_tiered_retention_keeps_latest_and_sparse_history(self):
+        retention = train_static_pilot.CheckpointRetention(mode="tiered", keep_latest=5)
+
+        retained = train_static_pilot.retained_generation_ids(130, retention)
+
+        self.assertIn(1, retained)
+        self.assertIn(2, retained)
+        self.assertIn(100, retained)
+        self.assertIn(110, retained)
+        self.assertIn(120, retained)
+        self.assertIn(126, retained)
+        self.assertIn(130, retained)
+        self.assertNotIn(3, retained)
+        self.assertNotIn(101, retained)
+        self.assertNotIn(111, retained)
+
+    def test_checkpoint_store_prunes_export_files_without_reusing_generation_ids(self):
+        retention = train_static_pilot.CheckpointRetention(mode="tiered", keep_latest=2)
+        entries = [{"id": index, "role": "pilot"} for index in range(1, 8)]
+        history = [{"trained": "pilot", "generation": index} for index in range(1, 8)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = train_static_pilot.TrainingCheckpointStore(Path(tmpdir), retention)
+            store.save(
+                pilot_model=None,
+                enemy_model=None,
+                history=history,
+                checkpoints={"pilot": entries, "enemies": []},
+                round_number=7,
+                phase_number=3,
+                config={},
+            )
+            state = json.loads((Path(tmpdir) / "state.json").read_text(encoding="utf-8"))
+            files = sorted(path.name for path in (Path(tmpdir) / "exports").glob("pilot-v*.json"))
+
+        self.assertEqual(files, ["pilot-v001.json", "pilot-v002.json", "pilot-v004.json", "pilot-v006.json", "pilot-v007.json"])
+        self.assertEqual(state["checkpointCounts"], {"pilot": 5, "enemies": 0})
+        self.assertEqual(state["totalGenerationCounts"], {"pilot": 7, "enemies": 0})
+        self.assertEqual(train_static_pilot.role_generation_count(history, "pilot") + 1, 8)
+
     def test_write_model_includes_exported_pilot_and_enemy_networks(self):
         pilot_model, enemy_model, self_play = train_static_pilot.train_self_play(
             seed=21,

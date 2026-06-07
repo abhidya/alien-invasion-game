@@ -50,8 +50,15 @@ python3.12 -m venv .venv-rl
 . .venv-rl/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements-static-pilot.txt
-python tools/train_static_pilot.py --balanced-rounds 48 --min-balanced-rounds 12 --balance-tolerance 0.2 --balance-patience 3 --balance-min-win-rate 0.25 --phase-timesteps 900 --max-phase-iterations 4 --eval-episodes 10 --max-steps 360 --dominance-threshold 0.65 --train-workers 4 --eval-workers 4
+python tools/train_publish.py --add-rounds 24
 ```
+
+`tools/train_publish.py` is the normal self-serve workflow. It resumes from
+`.training-checkpoints/galagai-balanced-v10`, trains the next balanced rounds,
+exports static JSON, prunes retained model files, runs verification, commits and
+pushes `master`, mirrors the same static files to `gh-pages`, and checks the
+public Pages manifest. Use `--target-rounds <n>` instead of `--add-rounds` when
+you want an absolute round target.
 
 The RL requirements stay on the newest SB3 line that installs with this Python
 3.12 environment's available torch wheels. At the time of this update, PyPI
@@ -67,7 +74,7 @@ Latest checked-in training run:
   "algorithm": "stable-baselines3-dqn",
   "cycles": 2,
   "generationsPerSide": null,
-  "balancedRounds": 18,
+  "balancedRounds": 48,
   "minBalancedRounds": 12,
   "balanceTolerance": 0.2,
   "balancePatience": 3,
@@ -79,38 +86,46 @@ Latest checked-in training run:
     64,
     64
   ],
-  "roundsCompleted": 18,
-  "checkpointCounts": {
-    "pilot": 16,
-    "enemies": 2
+  "roundsCompleted": 48,
+  "totalGenerationCounts": {
+    "pilot": 42,
+    "enemies": 6
+  },
+  "retainedCheckpointCounts": {
+    "pilot": 28,
+    "enemies": 6
+  },
+  "checkpointRetention": {
+    "mode": "tiered",
+    "keepLatest": 12
   },
   "evalEpisodes": 10,
   "artifact": {
-    "manifestBytes": 23763,
-    "checkpointFiles": 18,
-    "checkpointBytes": 901490
+    "manifestBytes": 49757,
+    "checkpointFiles": 34,
+    "checkpointBytes": 1707429
   },
   "selfPlayLatest": {
-    "round": 18,
-    "phase": 5,
-    "phaseIteration": 4,
+    "round": 48,
+    "phase": 13,
+    "phaseIteration": 2,
     "trained": "pilot",
-    "generation": 16,
+    "generation": 42,
     "dominanceMetric": "pilotWinRate",
     "dominanceThreshold": 0.65,
-    "dominanceReached": true,
-    "pilotWinRate": 1.0,
+    "dominanceReached": false,
+    "pilotWinRate": 0.0,
     "enemyWinRate": 0.0,
-    "averageScore": 1600.0,
-    "averageWave": 2.0,
+    "averageScore": 100.0,
+    "averageWave": 1.0,
     "averageSteps": 360.0,
-    "waveClearRate": 1.0,
-    "averageClearSteps": 360.0,
+    "waveClearRate": 0.0,
+    "averageClearSteps": 0.0,
     "enemyDropRate": 0.0,
     "invalidDropRate": 0.0,
     "enemyFireRate": 0.0,
-    "pilotFireRate": 0.3306,
-    "pilotShotAccuracy": 0.2017
+    "pilotFireRate": 0.3333,
+    "pilotShotAccuracy": 0.0167
   }
 }
 ```
@@ -164,7 +179,7 @@ python3.12 -m venv .venv-rl
 . .venv-rl/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements-ml.txt
-python tools/train_static_pilot.py --generations-per-side 100 --phase-timesteps 500 --max-phase-iterations 5 --eval-episodes 8 --max-steps 320 --dominance-threshold 0.6 --train-workers 4 --eval-workers 4
+python tools/train_publish.py --add-rounds 24
 ```
 
 The static trainer writes `js/galagai-model.json` plus checkpoint files under
@@ -178,9 +193,13 @@ summary. It checkpoints after every completed generation to
 buffer, exported generation JSON, and resumable `state.json`. Pass
 `--resume` to continue from that checkpoint directory, `--checkpoint-dir <path>`
 to change the location, `--no-checkpoints` for a throwaway run,
+`--checkpoint-retention tiered` to keep the latest N versions, every 2nd version
+through 100, every 10th through 1000, and every 100th after that,
 `--train-workers <n>` for SB3 `SubprocVecEnv` rollout workers, and
 `--eval-workers <n>` for multi-process dominance evaluation. Pass `--no-progress`
-for quiet CI logs.
+for quiet CI logs. Prefer `tools/train_publish.py` for normal model pushes
+because it applies tiered retention, commits `master`, and publishes `gh-pages`
+in one verified workflow.
 
 For a future Gymnasium adapter, `alien_invasion/gym_space.py` documents the
 modern `reset` and `step` shape:
