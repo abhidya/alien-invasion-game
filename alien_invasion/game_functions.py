@@ -211,10 +211,16 @@ def check_bullet_alien_collision(ai_settings: Settings, stats: GameStats, game_i
         create_fleet(ai_settings, game_items)
 
 
-def update_aliens(ai_settings: Settings, stats: GameStats, game_items: GameItems):
+def update_aliens(ai_settings: Settings, stats: GameStats, game_items: GameItems, fleet_move=None):
     """Update position for each alien."""
-    check_fleet_edges(ai_settings, game_items.aliens)
-    game_items.aliens.update(stats, game_items)
+    if fleet_move is None:
+        check_fleet_edges(ai_settings, game_items.aliens)
+    else:
+        if fleet_move[0] < 0 and any(alien.check_edges("left") for alien in game_items.aliens):
+            fleet_move = [1, fleet_move[1]]
+        elif fleet_move[0] > 0 and any(alien.check_edges("right") for alien in game_items.aliens):
+            fleet_move = [-1, fleet_move[1]]
+    game_items.aliens.update(stats, game_items, move=fleet_move)
 
     # Collision between ship and aliens.
     if pygame.sprite.spritecollideany(game_items.ship, game_items.aliens):
@@ -350,4 +356,3 @@ def check_high_score(stats: GameStats, game_items: GameItems):
     if stats.score > stats.high_score:
         stats.high_score = stats.score
         game_items.sb.prep_high_score()
-

@@ -1,6 +1,6 @@
 {
   "model": "linear-softmax-pilot",
-  "version": 1,
+  "version": 2,
   "actions": [
     "left",
     "right",
@@ -95,6 +95,74 @@
         0,
         0
       ]
-    ]
+    ],
+    "selfPlay": {
+      "type": "alternating-static-curriculum",
+      "rounds": [
+        {
+          "round": 1,
+          "trained": "pilot",
+          "pilotWinRate": 0.7884,
+          "enemyPressure": 0.38,
+          "averageWave": 3.77
+        },
+        {
+          "round": 2,
+          "trained": "enemies",
+          "pilotWinRate": 0.7814,
+          "enemyPressure": 0.4093,
+          "averageWave": 3.72
+        },
+        {
+          "round": 3,
+          "trained": "pilot",
+          "pilotWinRate": 0.7874,
+          "enemyPressure": 0.4093,
+          "averageWave": 3.74
+        },
+        {
+          "round": 4,
+          "trained": "enemies",
+          "pilotWinRate": 0.7835,
+          "enemyPressure": 0.4254,
+          "averageWave": 3.71
+        },
+        {
+          "round": 5,
+          "trained": "pilot",
+          "pilotWinRate": 0.7876,
+          "enemyPressure": 0.4254,
+          "averageWave": 3.72
+        },
+        {
+          "round": 6,
+          "trained": "enemies",
+          "pilotWinRate": 0.7827,
+          "enemyPressure": 0.4457,
+          "averageWave": 3.69
+        },
+        {
+          "round": 7,
+          "trained": "pilot",
+          "pilotWinRate": 0.7876,
+          "enemyPressure": 0.4457,
+          "averageWave": 3.7
+        },
+        {
+          "round": 8,
+          "trained": "enemies",
+          "pilotWinRate": 0.7814,
+          "enemyPressure": 0.4715,
+          "averageWave": 3.65
+        }
+      ],
+      "latest": {
+        "round": 8,
+        "trained": "enemies",
+        "pilotWinRate": 0.7814,
+        "enemyPressure": 0.4715,
+        "averageWave": 3.65
+      }
+    }
   }
 }

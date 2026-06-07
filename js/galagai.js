@@ -10,6 +10,14 @@
   var startButton = document.getElementById("start-button");
   var aiButton = document.getElementById("ai-button");
   var resetButton = document.getElementById("reset-button");
+  var checkpointNodes = {
+    modelName: document.getElementById("model-name"),
+    evalAccuracy: document.getElementById("eval-accuracy"),
+    selfPlayRound: document.getElementById("self-play-round"),
+    trainedSide: document.getElementById("trained-side"),
+    pilotWinRate: document.getElementById("pilot-win-rate"),
+    enemyPressure: document.getElementById("enemy-pressure")
+  };
 
   var assets = {
     ship: loadImage("alien_invasion/images/ship1.png"),
@@ -129,6 +137,24 @@
       aiButton.textContent = pilotModel ? "Pilot: trained" : "Pilot: heuristic";
     }
     aiButton.setAttribute("aria-pressed", pilot ? "true" : "false");
+    updateCheckpointPanel();
+  }
+
+  function updateCheckpointPanel() {
+    var metrics = pilotModel && pilotModel.metrics ? pilotModel.metrics : null;
+    var selfPlay = metrics && metrics.selfPlay ? metrics.selfPlay : null;
+    var latest = selfPlay && selfPlay.latest ? selfPlay.latest : null;
+
+    checkpointNodes.modelName.textContent = pilotModel ? pilotModel.model : "heuristic";
+    checkpointNodes.evalAccuracy.textContent = metrics ? percent(metrics.evalAccuracy) : "--";
+    checkpointNodes.selfPlayRound.textContent = latest ? latest.round : "--";
+    checkpointNodes.trainedSide.textContent = latest ? latest.trained : "--";
+    checkpointNodes.pilotWinRate.textContent = latest ? percent(latest.pilotWinRate) : "--";
+    checkpointNodes.enemyPressure.textContent = latest ? percent(latest.enemyPressure) : "--";
+  }
+
+  function percent(value) {
+    return Math.round(Number(value || 0) * 100) + "%";
   }
 
   function loop(now) {

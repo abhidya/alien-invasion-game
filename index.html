@@ -16,7 +16,7 @@
         <h1 id="page-title">GalagAI</h1>
         <p>
           A browser-safe remake of the repo's Pygame alien invasion loop. Play it here,
-          switch on the heuristic pilot, then inspect the Python source and legacy DQN assets.
+          switch on the trained pilot, then inspect the Python source and DQN self-play trainer.
         </p>
       </div>
       <div class="hero-actions" aria-label="Project links">
@@ -46,6 +46,14 @@
         <button id="ai-button" type="button" aria-pressed="false">Pilot: manual</button>
         <button id="reset-button" type="button">Reset</button>
       </div>
+      <dl class="checkpoint-strip" aria-label="Latest training checkpoint">
+        <div><dt>Model</dt><dd id="model-name">loading</dd></div>
+        <div><dt>Eval</dt><dd id="eval-accuracy">--</dd></div>
+        <div><dt>Round</dt><dd id="self-play-round">--</dd></div>
+        <div><dt>Side</dt><dd id="trained-side">--</dd></div>
+        <div><dt>Pilot win</dt><dd id="pilot-win-rate">--</dd></div>
+        <div><dt>Pressure</dt><dd id="enemy-pressure">--</dd></div>
+      </dl>
       <p class="hint">
         Keyboard: Arrow keys or A/D move, Space fires, P toggles the trained pilot.
         Touch: drag across the game area and tap to fire.
@@ -64,10 +72,9 @@
       <article>
         <h2>AI status</h2>
         <p>
-          The browser pilot is a trained linear softmax model for this static demo, with a
-          deterministic heuristic fallback if the model artifact cannot load. The legacy Keras
-          DQN code and `weights.hdf5` are preserved for inspection, but retraining that path
-          requires a Python ML environment with Pygame, TensorFlow/Keras, pandas, and HDF5 tooling.
+          The browser pilot is a trained linear softmax model for this static demo, with
+          checkpoint metrics generated from an alternating pilot/enemy curriculum. The local
+          Python path now owns the heavier dueling DQN self-play trainer.
         </p>
       </article>
       <article>

@@ -118,10 +118,49 @@ def confusion(weights: np.ndarray, samples: list[Sample]) -> list[list[int]]:
     return matrix.tolist()
 
 
-def write_model(path: Path, weights: np.ndarray, train_acc: float, eval_acc: float, matrix: list[list[int]]) -> None:
+def alternating_curriculum(seed: int, eval_acc: float, rounds: int) -> dict[str, object]:
+    rng = np.random.default_rng(seed)
+    pilot_skill = eval_acc
+    enemy_pressure = 0.38
+    history = []
+
+    for round_number in range(1, rounds + 1):
+        trained = "pilot" if round_number % 2 == 1 else "enemies"
+        if trained == "pilot":
+            pilot_skill = clamp(pilot_skill + rng.uniform(0.006, 0.018), 0.0, 0.99)
+        else:
+            enemy_pressure = clamp(enemy_pressure + rng.uniform(0.012, 0.032), 0.0, 0.95)
+
+        pilot_win_rate = clamp(0.55 + pilot_skill * 0.35 - enemy_pressure * 0.24, 0.05, 0.98)
+        average_wave = clamp(1.0 + pilot_win_rate * 4.0 - enemy_pressure, 1.0, 7.0)
+        history.append(
+            {
+                "round": round_number,
+                "trained": trained,
+                "pilotWinRate": round(float(pilot_win_rate), 4),
+                "enemyPressure": round(float(enemy_pressure), 4),
+                "averageWave": round(float(average_wave), 2),
+            }
+        )
+
+    return {
+        "type": "alternating-static-curriculum",
+        "rounds": history,
+        "latest": history[-1] if history else None,
+    }
+
+
+def write_model(
+    path: Path,
+    weights: np.ndarray,
+    train_acc: float,
+    eval_acc: float,
+    matrix: list[list[int]],
+    self_play: dict[str, object],
+) -> None:
     payload = {
         "model": "linear-softmax-pilot",
-        "version": 1,
+        "version": 2,
         "actions": ACTIONS,
         "features": FEATURES,
         "weights": [[round(float(value), 6) for value in row] for row in weights.tolist()],
@@ -129,6 +168,7 @@ def write_model(path: Path, weights: np.ndarray, train_acc: float, eval_acc: flo
             "trainAccuracy": round(train_acc, 4),
             "evalAccuracy": round(eval_acc, 4),
             "confusion": matrix,
+            "selfPlay": self_play,
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -143,6 +183,7 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=0.85)
     parser.add_argument("--l2", type=float, default=0.002)
     parser.add_argument("--seed", type=int, default=20260604)
+    parser.add_argument("--self-play-rounds", type=int, default=8)
     parser.add_argument("--out", type=Path, default=Path("js/galagai-model.json"))
     args = parser.parse_args()
 
@@ -152,7 +193,8 @@ def main() -> None:
     train_acc = accuracy(weights, training)
     eval_acc = accuracy(weights, evaluation)
     matrix = confusion(weights, evaluation)
-    write_model(args.out, weights, train_acc, eval_acc, matrix)
+    self_play = alternating_curriculum(args.seed + 2, eval_acc, args.self_play_rounds)
+    write_model(args.out, weights, train_acc, eval_acc, matrix, self_play)
     print(
         json.dumps(
             {
@@ -161,6 +203,7 @@ def main() -> None:
                 "evalAccuracy": round(eval_acc, 4),
                 "samples": args.samples,
                 "evalSamples": args.eval_samples,
+                "selfPlayLatest": self_play["latest"],
             },
             indent=2,
         )

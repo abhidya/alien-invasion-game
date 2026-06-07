@@ -1,61 +1,52 @@
-import numpy as np
-import gym
+"""Gymnasium/SB3 reference for future Alien Invasion environment adapters.
 
-from keras.models import Sequential
-from keras.layers import Dense, Activation, Flatten
-from keras.optimizers import Adam
+This file used to execute an unrelated Atari CEM example at import time with
+old ``gym`` and ``keras-rl`` imports. It is now a non-executing reference for
+the adapter shape needed before using Stable-Baselines3 directly.
+"""
 
-from rl.agents.cem import CEMAgent
-from rl.memory import EpisodeParameterMemory
+from __future__ import annotations
 
-ENV_NAME = 'Assault-ram-v0'
-
-
-# Get the environment and extract the number of actions.
-env = gym.make(ENV_NAME)
-np.random.seed(123)
-env.seed(123)
-
-nb_actions = env.action_space.n
-obs_dim = env.observation_space.shape[0]
-
-# Option 1 : Simple model
-model = Sequential()
-model.add(Flatten(input_shape=(1,) + env.observation_space.shape))
-model.add(Dense(nb_actions))
-model.add(Activation('softmax'))
-
-# Option 2: deep network
-# model = Sequential()
-# model.add(Flatten(input_shape=(1,) + env.observation_space.shape))
-# model.add(Dense(16))
-# model.add(Activation('relu'))
-# model.add(Dense(16))
-# model.add(Activation('relu'))
-# model.add(Dense(16))
-# model.add(Activation('relu'))
-# model.add(Dense(nb_actions))
-# model.add(Activation('softmax'))
+from dataclasses import dataclass
 
 
-print(model.summary())
+@dataclass(frozen=True)
+class GymnasiumAdapterSpec:
+    """Interface facts a Gymnasium adapter must satisfy."""
+
+    observation_shape: tuple[int, int, int] = (68, 52, 1)
+    pilot_actions: tuple[str, ...] = ("right", "left", "fire", "hold")
+    enemy_actions: tuple[str, ...] = ("drift_left", "drop", "drift_right")
+    reset_returns_info: bool = True
+    step_returns_terminated_truncated: bool = True
+    render_mode_required_at_make: bool = True
 
 
-# Finally, we configure and compile our agent. You can use every built-in Keras optimizer and
-# even the metrics!
-memory = EpisodeParameterMemory(limit=1000, window_length=1)
+SB3_DQN_REFERENCE = {
+    "import": "from stable_baselines3 import DQN",
+    "environment_import": "import gymnasium as gym",
+    "pilot_policy": "CnnPolicy",
+    "enemy_policy": "CnnPolicy",
+    "why": (
+        "Alien Invasion has discrete pilot and enemy actions. A frame-shaped "
+        "observation should use a CNN policy; low-dimensional engineered "
+        "features should use an MLP policy."
+    ),
+    "notes": [
+        "Use a separate evaluation environment, not the training loop.",
+        "Handle terminated and truncated separately in custom adapters.",
+        "Freeze the opponent policy while training the active self-play role.",
+    ],
+}
 
-cem = CEMAgent(model=model, nb_actions=nb_actions, memory=memory,
-               batch_size=50, nb_steps_warmup=2000, train_interval=50, elite_frac=0.05)
-cem.compile()
 
-# Okay, now it's time to learn something! We visualize the training here for show, but this
-# slows down training quite a lot. You can always safely abort the training prematurely using
-# Ctrl + C.
-cem.fit(env, nb_steps=100000, visualize=True, verbose=2)
-
-# After training is done, we save the best weights.
-cem.save_weights('cem_{}_params.h5f'.format(ENV_NAME), overwrite=True)
-
-# Finally, evaluate our algorithm for 5 episodes.
-cem.test(env, nb_episodes=5, visualize=True)
+def describe_adapter() -> dict[str, object]:
+    spec = GymnasiumAdapterSpec()
+    return {
+        "observation_shape": spec.observation_shape,
+        "pilot_action_count": len(spec.pilot_actions),
+        "enemy_action_count": len(spec.enemy_actions),
+        "gymnasium_reset": "obs, info = env.reset(seed=seed)",
+        "gymnasium_step": "obs, reward, terminated, truncated, info = env.step(action)",
+        "stable_baselines3": SB3_DQN_REFERENCE,
+    }
