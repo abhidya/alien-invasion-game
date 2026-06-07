@@ -19,6 +19,139 @@ class StaticPilotArtifactTest(unittest.TestCase):
         self.assertLess(second_enemy_reward, first_enemy_reward)
         self.assertEqual(second_info["invalidDrops"], 1)
 
+    def test_wave_one_bees_cannot_fire(self):
+        env = train_static_pilot.HeadlessGalagai(seed=14, max_steps=20)
+
+        _, _, _, _, info = env.step(3, 5)
+
+        self.assertTrue(info["events"].invalid_fire)
+        self.assertFalse(info["events"].enemy_fired)
+        self.assertEqual(info["enemyFires"], 0)
+
+    def test_partial_score_does_not_count_as_pilot_dominance(self):
+        env = train_static_pilot.HeadlessGalagai(seed=15, max_steps=20)
+        env.score = 700
+        env.steps = env.max_steps
+
+        self.assertEqual(env.winner(done=True), "timeout")
+
+    def test_pilot_reward_prefers_hits_and_fast_wave_clears(self):
+        env = train_static_pilot.HeadlessGalagai(seed=13, max_steps=100)
+        accurate_hit = train_static_pilot.StepEvents(
+            score_gain=50,
+            aliens_destroyed=1,
+            life_loss=0,
+            wave_cleared=False,
+            invalid_drop=False,
+            invalid_fire=False,
+            valid_drop=False,
+            enemy_fired=False,
+            pilot_fired=True,
+            pilot_missed=False,
+            pilot_hits=1,
+            pilot_aligned_action=True,
+            pilot_aligned_fire=True,
+            pilot_bad_fire=False,
+            enemy_tactical_action=False,
+        )
+        off_target_fire = train_static_pilot.StepEvents(
+            score_gain=0,
+            aliens_destroyed=0,
+            life_loss=0,
+            wave_cleared=False,
+            invalid_drop=False,
+            invalid_fire=False,
+            valid_drop=False,
+            enemy_fired=False,
+            pilot_fired=True,
+            pilot_missed=False,
+            pilot_hits=0,
+            pilot_aligned_action=False,
+            pilot_aligned_fire=False,
+            pilot_bad_fire=True,
+            enemy_tactical_action=False,
+        )
+        slow_clear = train_static_pilot.StepEvents(
+            score_gain=250,
+            aliens_destroyed=0,
+            life_loss=0,
+            wave_cleared=True,
+            invalid_drop=False,
+            invalid_fire=False,
+            valid_drop=False,
+            enemy_fired=False,
+            pilot_fired=False,
+            pilot_missed=False,
+            pilot_hits=0,
+            pilot_aligned_action=False,
+            pilot_aligned_fire=False,
+            pilot_bad_fire=False,
+            enemy_tactical_action=False,
+        )
+
+        self.assertGreater(env.pilot_reward(accurate_hit, done=False), env.pilot_reward(off_target_fire, done=False))
+        env.steps = 10
+        fast_clear_reward = env.pilot_reward(slow_clear, done=True)
+        env.steps = 90
+        slow_clear_reward = env.pilot_reward(slow_clear, done=True)
+
+        self.assertGreater(fast_clear_reward, slow_clear_reward)
+
+    def test_balanced_role_selector_trains_dominated_side(self):
+        checkpoints = {"pilot": [{"id": 1}], "enemies": [{"id": 1}]}
+
+        self.assertEqual(
+            train_static_pilot.choose_balanced_role(
+                {"pilotWinRate": 0.0, "enemyWinRate": 1.0},
+                checkpoints,
+                dominance_threshold=0.6,
+            ),
+            "pilot",
+        )
+        self.assertEqual(
+            train_static_pilot.choose_balanced_role(
+                {"pilotWinRate": 1.0, "enemyWinRate": 0.0},
+                checkpoints,
+                dominance_threshold=0.6,
+            ),
+            "enemies",
+        )
+        self.assertEqual(
+            train_static_pilot.choose_balanced_role(
+                {"pilotWinRate": 0.0, "enemyWinRate": 0.0},
+                checkpoints,
+                dominance_threshold=0.6,
+            ),
+            "pilot",
+        )
+
+    def test_balanced_stop_requires_recent_competitive_balance(self):
+        history = [
+            {"pilotWinRate": 0.45, "enemyWinRate": 0.35},
+            {"pilotWinRate": 0.4, "enemyWinRate": 0.35},
+        ]
+
+        self.assertTrue(
+            train_static_pilot.balanced_stop_reached(
+                history,
+                min_balanced_rounds=2,
+                balance_patience=2,
+                dominance_threshold=0.6,
+                balance_tolerance=0.18,
+                balance_min_win_rate=0.25,
+            )
+        )
+        self.assertFalse(
+            train_static_pilot.balanced_stop_reached(
+                [{"pilotWinRate": 0.0, "enemyWinRate": 0.0}, {"pilotWinRate": 0.0, "enemyWinRate": 0.0}],
+                min_balanced_rounds=2,
+                balance_patience=2,
+                dominance_threshold=0.6,
+                balance_tolerance=0.18,
+                balance_min_win_rate=0.25,
+            )
+        )
+
     def test_write_model_includes_exported_pilot_and_enemy_networks(self):
         pilot_model, enemy_model, self_play = train_static_pilot.train_self_play(
             seed=21,
@@ -37,7 +170,7 @@ class StaticPilotArtifactTest(unittest.TestCase):
             pilot_payload = json.loads((path.parent / payload["networkRef"]).read_text(encoding="utf-8"))
             enemy_payload = json.loads((path.parent / payload["enemies"]["networkRef"]).read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["version"], 7)
+        self.assertEqual(payload["version"], 10)
         self.assertEqual(payload["algorithm"], "stable-baselines3-dqn")
         self.assertEqual(payload["actions"], train_static_pilot.PILOT_ACTIONS)
         self.assertEqual(payload["features"], train_static_pilot.FEATURES)
@@ -55,6 +188,8 @@ class StaticPilotArtifactTest(unittest.TestCase):
         self.assertEqual(payload["metrics"]["selfPlay"]["checkpointCounts"]["pilot"], 1)
         self.assertEqual(payload["metrics"]["selfPlay"]["checkpointCounts"]["enemies"], 1)
         self.assertIn("invalidDropRate", payload["metrics"])
+        self.assertIn("pilotShotAccuracy", payload["metrics"])
+        self.assertIn("waveClearRate", payload["metrics"])
 
     def test_dominance_gate_repeats_phase_until_threshold_or_cap(self):
         _, _, self_play = train_static_pilot.train_self_play(

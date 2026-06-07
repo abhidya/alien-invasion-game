@@ -74,7 +74,7 @@ ACTION_DT = 0.12
 DROP_COOLDOWN_SECONDS = 1.08
 ENEMY_SHOT_COOLDOWN_SECONDS = 0.0
 INVALID_DROP_PENALTY = 0.90
-MODEL_SCHEMA_VERSION = 7
+MODEL_SCHEMA_VERSION = 10
 DQN_NET_ARCH = [64, 64]
 MODEL_FILE_DIR = "galagai-models"
 DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai")
@@ -87,6 +87,7 @@ class Actor:
     width: float
     height: float
     alive: bool = True
+    role: str = "bee"
 
     @property
     def center_x(self) -> float:
@@ -122,6 +123,7 @@ class StepEvents:
     enemy_fired: bool
     pilot_fired: bool
     pilot_missed: bool
+    pilot_hits: int
     pilot_aligned_action: bool
     pilot_aligned_fire: bool
     pilot_bad_fire: bool
@@ -138,6 +140,10 @@ class EpisodeResult:
     invalid_drop_rate: float
     enemy_fire_rate: float
     pilot_fire_rate: float
+    pilot_hits: int
+    pilot_fires: int
+    pilot_shot_accuracy: float
+    wave_cleared: bool
     lives_left: int
 
 
@@ -280,6 +286,7 @@ class HeadlessGalagai:
         self.invalid_drops = 0
         self.enemy_fires = 0
         self.pilot_fires = 0
+        self.pilot_hits = 0
         return self.features()
 
     def create_fleet(self, wave: int) -> list[Actor]:
@@ -291,8 +298,24 @@ class HeadlessGalagai:
         start_x = (CANVAS_WIDTH - (columns - 1) * gap_x) / 2.0 - 24.0
         for row in range(rows):
             for col in range(columns):
-                aliens.append(Actor(start_x + col * gap_x, 74.0 + row * gap_y, ALIEN_WIDTH, ALIEN_HEIGHT))
+                aliens.append(
+                    Actor(
+                        start_x + col * gap_x,
+                        74.0 + row * gap_y,
+                        ALIEN_WIDTH,
+                        ALIEN_HEIGHT,
+                        role=self.enemy_role_for_slot(row, col, wave),
+                    )
+                )
         return aliens
+
+    @staticmethod
+    def enemy_role_for_slot(row: int, col: int, wave: int) -> str:
+        if wave >= 3 and row == 0 and col % 3 == 1:
+            return "boss"
+        if wave >= 2 and row <= 1 and col % 2 == 0:
+            return "butterfly"
+        return "bee"
 
     def features(self) -> np.ndarray:
         ship_center = self.ship.center_x
@@ -361,7 +384,7 @@ class HeadlessGalagai:
             self.fleet_direction = -1
         elif enemy_action == 1:
             self.fleet_direction = -1
-            enemy_fired = self.fire_enemy_shot()
+            enemy_fired = self.fire_enemy_shot(("butterfly", "boss"))
             if enemy_fired:
                 self.enemy_fires += 1
             else:
@@ -379,28 +402,28 @@ class HeadlessGalagai:
             self.fleet_direction = 1
         elif enemy_action == 4:
             self.fleet_direction = 1
-            enemy_fired = self.fire_enemy_shot()
+            enemy_fired = self.fire_enemy_shot(("butterfly", "boss"))
             if enemy_fired:
                 self.enemy_fires += 1
             else:
                 invalid_fire = True
         elif enemy_action == 5:
-            enemy_fired = self.fire_enemy_shot()
+            enemy_fired = self.fire_enemy_shot(("butterfly", "boss"))
             if enemy_fired:
                 self.enemy_fires += 1
             else:
                 invalid_fire = True
         elif enemy_action == 6:
             self.fleet_direction = -1 if target_dx < 0 else 1
-            self.dive_fleet()
-            enemy_fired = self.fire_enemy_shot()
+            self.dive_fleet(("butterfly", "boss"))
+            enemy_fired = self.fire_enemy_shot(("butterfly", "boss"))
             if enemy_fired:
                 self.enemy_fires += 1
             else:
                 invalid_fire = True
         elif enemy_action == 7:
             self.fleet_direction *= -1
-            enemy_fired = self.fire_enemy_shot()
+            enemy_fired = self.fire_enemy_shot(("boss",))
             if enemy_fired:
                 self.enemy_fires += 1
             else:
@@ -413,6 +436,7 @@ class HeadlessGalagai:
         self.update_projectiles()
         self.update_aliens()
         hit_events = self.resolve_collisions()
+        pilot_hits = int(hit_events["aliensHit"])
 
         done = False
         wave_cleared = False
@@ -440,6 +464,7 @@ class HeadlessGalagai:
             enemy_fired=enemy_fired,
             pilot_fired=pilot_fired,
             pilot_missed=pilot_missed,
+            pilot_hits=pilot_hits,
             pilot_aligned_action=pilot_aligned_action,
             pilot_aligned_fire=pilot_aligned_fire,
             pilot_bad_fire=pilot_bad_fire,
@@ -457,6 +482,7 @@ class HeadlessGalagai:
             "invalidDrops": self.invalid_drops,
             "enemyFires": self.enemy_fires,
             "pilotFires": self.pilot_fires,
+            "pilotHits": self.pilot_hits,
         }
         return self.features(), pilot_reward, enemy_reward, done, info
 
@@ -472,8 +498,12 @@ class HeadlessGalagai:
         self.pilot_fires += 1
         return True, False
 
-    def fire_enemy_shot(self) -> bool:
-        live_aliens = [alien for alien in self.aliens if alien.alive]
+    def fire_enemy_shot(self, roles: tuple[str, ...] | None = None) -> bool:
+        live_aliens = [
+            alien
+            for alien in self.aliens
+            if alien.alive and (roles is None or alien.role in roles)
+        ]
         if not live_aliens:
             return False
         alien = min(live_aliens, key=lambda item: abs(item.center_x - self.ship.center_x))
@@ -482,11 +512,15 @@ class HeadlessGalagai:
 
     def drop_fleet(self) -> None:
         for alien in self.aliens:
-            if alien.alive:
+            if alien.alive and alien.role == "bee":
                 alien.y += FLEET_DROP * 0.65
 
-    def dive_fleet(self) -> None:
-        live_aliens = [alien for alien in self.aliens if alien.alive]
+    def dive_fleet(self, roles: tuple[str, ...] | None = None) -> None:
+        live_aliens = [
+            alien
+            for alien in self.aliens
+            if alien.alive and (roles is None or alien.role in roles)
+        ]
         if not live_aliens:
             return
         diver = min(live_aliens, key=lambda alien: abs(alien.center_x - self.ship.center_x))
@@ -527,6 +561,7 @@ class HeadlessGalagai:
                     alien.alive = False
                     bullet.y = -100.0
                     aliens_hit += 1
+                    self.pilot_hits += 1
                     self.score += 50 * self.wave
                     break
 
@@ -548,17 +583,20 @@ class HeadlessGalagai:
 
     def pilot_reward(self, events: StepEvents, done: bool) -> float:
         reward = events.score_gain / 35.0
-        reward += 7.0 if events.wave_cleared else 0.0
+        clear_speed = max(0.0, 1.0 - self.steps / max(1, self.max_steps))
+        reward += 8.0 + 6.0 * clear_speed if events.wave_cleared else 0.0
+        reward += 1.15 * max(0, events.pilot_hits)
         reward -= 7.0 * max(0, events.life_loss)
         reward += 0.08 if events.pilot_aligned_action else 0.0
-        reward += 0.24 if events.pilot_aligned_fire else 0.0
-        reward -= 0.18 if events.pilot_bad_fire else 0.0
-        reward -= 0.20 if events.pilot_missed else 0.0
-        reward -= 0.002
+        if events.pilot_fired:
+            reward += 0.42 if events.pilot_aligned_fire else -0.22
+        reward -= 0.48 if events.pilot_bad_fire else 0.0
+        reward -= 0.32 if events.pilot_missed else 0.0
+        reward -= 0.008
         if done:
             winner = self.winner(done)
             if winner == "pilot":
-                reward += 6.0
+                reward += 6.0 + 3.0 * clear_speed
             elif winner == "enemies":
                 reward -= 6.0
             else:
@@ -566,9 +604,11 @@ class HeadlessGalagai:
         return float(reward)
 
     def enemy_reward(self, events: StepEvents, done: bool) -> float:
+        clear_speed = max(0.0, 1.0 - self.steps / max(1, self.max_steps))
         reward = 7.0 * max(0, events.life_loss)
         reward -= 1.45 * max(0, events.aliens_destroyed)
         reward -= events.score_gain / 55.0
+        reward -= 2.0 + 2.0 * clear_speed if events.wave_cleared else 0.0
         reward += 0.02 * self.live_alien_count / max(1, len(self.aliens))
         reward += 0.12 if events.enemy_tactical_action else 0.0
         if events.valid_drop:
@@ -591,9 +631,7 @@ class HeadlessGalagai:
             return "none"
         if self.lives <= 0:
             return "enemies"
-        if self.live_alien_count == 0 or self.score >= 300 or self.wave > 1:
-            return "pilot"
-        if self.steps >= self.max_steps and self.lives >= 2 and self.score >= 100:
+        if self.live_alien_count == 0 or self.wave > 1:
             return "pilot"
         return "timeout"
 
@@ -711,6 +749,7 @@ def serializable_info(info: dict[str, object]) -> dict[str, object]:
             "enemyFired": events.enemy_fired,
             "pilotFired": events.pilot_fired,
             "pilotMissed": events.pilot_missed,
+            "pilotHits": events.pilot_hits,
             "pilotAlignedAction": events.pilot_aligned_action,
             "pilotAlignedFire": events.pilot_aligned_fire,
             "pilotBadFire": events.pilot_bad_fire,
@@ -805,6 +844,8 @@ class TrainingProgress:
             enemies=enemy_count,
             p_win=f"{float(metrics['pilotWinRate']):.2f}",
             e_win=f"{float(metrics['enemyWinRate']):.2f}",
+            acc=f"{float(metrics.get('pilotShotAccuracy', 0.0)):.2f}",
+            clear=f"{float(metrics.get('waveClearRate', 0.0)):.2f}",
             drop=f"{float(metrics['enemyDropRate']):.3f}",
             invalid=f"{float(metrics['invalidDropRate']):.3f}",
             reached=str(bool(metrics["dominanceReached"])).lower(),
@@ -820,12 +861,81 @@ class TrainingProgress:
         self.bar.close()
 
 
-def progress_total(cycles: int, max_phase_iterations: int, generations_per_side: int | None, rounds: int | None) -> int:
+def progress_total(
+    cycles: int,
+    max_phase_iterations: int,
+    generations_per_side: int | None,
+    rounds: int | None,
+    balanced_rounds: int | None,
+) -> int:
+    if balanced_rounds is not None:
+        return balanced_rounds
     if generations_per_side is not None:
         return generations_per_side * 2
     if rounds is not None:
         return rounds
     return cycles * 2 * max_phase_iterations
+
+
+def balanced_metric_reached(
+    metrics: dict[str, object],
+    *,
+    dominance_threshold: float,
+    balance_tolerance: float,
+    balance_min_win_rate: float,
+) -> bool:
+    pilot_win_rate = float(metrics.get("pilotWinRate", 0.0))
+    enemy_win_rate = float(metrics.get("enemyWinRate", 0.0))
+    return (
+        max(pilot_win_rate, enemy_win_rate) < dominance_threshold
+        and max(pilot_win_rate, enemy_win_rate) >= balance_min_win_rate
+        and abs(pilot_win_rate - enemy_win_rate) <= balance_tolerance
+    )
+
+
+def balanced_stop_reached(
+    history: list[dict[str, object]],
+    *,
+    min_balanced_rounds: int,
+    balance_patience: int,
+    dominance_threshold: float,
+    balance_tolerance: float,
+    balance_min_win_rate: float,
+) -> bool:
+    patience = max(1, balance_patience)
+    if len(history) < max(min_balanced_rounds, patience):
+        return False
+    return all(
+        balanced_metric_reached(
+            metrics,
+            dominance_threshold=dominance_threshold,
+            balance_tolerance=balance_tolerance,
+            balance_min_win_rate=balance_min_win_rate,
+        )
+        for metrics in history[-patience:]
+    )
+
+
+def choose_balanced_role(
+    latest_metrics: dict[str, object] | None,
+    checkpoints: dict[str, list[dict[str, object]]],
+    *,
+    dominance_threshold: float,
+) -> str:
+    if not checkpoints["pilot"]:
+        return "pilot"
+    if not checkpoints["enemies"]:
+        return "enemies"
+    if latest_metrics is None:
+        return "pilot"
+
+    pilot_win_rate = float(latest_metrics.get("pilotWinRate", 0.0))
+    enemy_win_rate = float(latest_metrics.get("enemyWinRate", 0.0))
+    if enemy_win_rate >= dominance_threshold and enemy_win_rate >= pilot_win_rate:
+        return "pilot"
+    if pilot_win_rate >= dominance_threshold and pilot_win_rate > enemy_win_rate:
+        return "enemies"
+    return "pilot" if pilot_win_rate <= enemy_win_rate else "enemies"
 
 
 class TrainingCheckpointStore:
@@ -994,6 +1104,11 @@ def train_self_play(
     dominance_threshold: float = 0.6,
     max_phase_iterations: int = 3,
     generations_per_side: int | None = None,
+    balanced_rounds: int | None = None,
+    min_balanced_rounds: int = 6,
+    balance_tolerance: float = 0.18,
+    balance_patience: int = 3,
+    balance_min_win_rate: float = 0.25,
     rounds: int | None = None,
     timesteps_per_round: int | None = None,
     progress: bool = False,
@@ -1004,9 +1119,13 @@ def train_self_play(
 ) -> tuple[DQN, DQN, dict[str, object]]:
     if timesteps_per_round is not None:
         phase_timesteps = timesteps_per_round
+    if balanced_rounds is not None and balanced_rounds < 2:
+        raise ValueError("balanced_rounds must be at least 2 so both roles can get a checkpoint.")
     train_workers = max(1, int(train_workers))
     eval_workers = max(1, int(eval_workers))
-    if generations_per_side is not None:
+    if balanced_rounds is not None:
+        phase_roles = []
+    elif generations_per_side is not None:
         phase_roles = []
     elif rounds is not None:
         phase_roles = ["pilot" if phase % 2 == 1 else "enemies" for phase in range(1, rounds + 1)]
@@ -1035,7 +1154,7 @@ def train_self_play(
     completed_generations = len(history)
     progress_tracker = TrainingProgress(
         progress,
-        progress_total(cycles, max_phase_iterations, generations_per_side, rounds),
+        progress_total(cycles, max_phase_iterations, generations_per_side, rounds, balanced_rounds),
         completed=completed_generations,
     )
     checkpoint_config = {
@@ -1047,6 +1166,11 @@ def train_self_play(
         "dominanceThreshold": dominance_threshold,
         "maxPhaseIterations": max_phase_iterations,
         "generationsPerSide": generations_per_side,
+        "balancedRounds": balanced_rounds,
+        "minBalancedRounds": min_balanced_rounds,
+        "balanceTolerance": balance_tolerance,
+        "balancePatience": balance_patience,
+        "balanceMinWinRate": balance_min_win_rate,
         "rounds": rounds,
         "trainWorkers": train_workers,
         "evalWorkers": eval_workers,
@@ -1148,7 +1272,38 @@ def train_self_play(
         return dominance_reached
 
     try:
-        if generations_per_side is not None:
+        if balanced_rounds is not None:
+            phase_number = phase_number_offset
+            while len(history) < balanced_rounds:
+                if balanced_stop_reached(
+                    history,
+                    min_balanced_rounds=min_balanced_rounds,
+                    balance_patience=balance_patience,
+                    dominance_threshold=dominance_threshold,
+                    balance_tolerance=balance_tolerance,
+                    balance_min_win_rate=balance_min_win_rate,
+                ):
+                    break
+                role = choose_balanced_role(
+                    history[-1] if history else None,
+                    checkpoints,
+                    dominance_threshold=dominance_threshold,
+                )
+                phase_number += 1
+                for phase_iteration in range(1, max_phase_iterations + 1):
+                    if len(history) >= balanced_rounds:
+                        break
+                    dominance_reached = run_generation(role, phase_number, phase_iteration)
+                    if dominance_reached or balanced_stop_reached(
+                        history,
+                        min_balanced_rounds=min_balanced_rounds,
+                        balance_patience=balance_patience,
+                        dominance_threshold=dominance_threshold,
+                        balance_tolerance=balance_tolerance,
+                        balance_min_win_rate=balance_min_win_rate,
+                    ):
+                        break
+        elif generations_per_side is not None:
             phase_number = phase_number_offset
             role = "pilot" if len(checkpoints["pilot"]) <= len(checkpoints["enemies"]) else "enemies"
             while len(checkpoints["pilot"]) < generations_per_side or len(checkpoints["enemies"]) < generations_per_side:
@@ -1183,6 +1338,11 @@ def train_self_play(
         "checkpoints": checkpoints,
         "cycles": cycles,
         "generationsPerSide": generations_per_side,
+        "balancedRounds": balanced_rounds,
+        "minBalancedRounds": min_balanced_rounds,
+        "balanceTolerance": balance_tolerance,
+        "balancePatience": balance_patience,
+        "balanceMinWinRate": balance_min_win_rate,
         "phaseTimesteps": phase_timesteps,
         "maxPhaseIterations": max_phase_iterations,
         "dominanceThreshold": dominance_threshold,
@@ -1273,6 +1433,9 @@ def run_episode(seed: int, pilot_policy: Policy, enemy_policy: Policy, max_steps
         enemy_action = enemy_policy.act(observation)
         observation, _, _, done, info = game.step(pilot_action, enemy_action)
     drop_attempts = max(1, int(info.get("dropAttempts", 0)))
+    pilot_fires = int(info.get("pilotFires", 0))
+    pilot_hits = int(info.get("pilotHits", 0))
+    wave_cleared = int(info.get("wave", 1)) > 1
     return EpisodeResult(
         winner=str(info.get("winner", "none")),
         score=int(info.get("score", 0)),
@@ -1281,7 +1444,11 @@ def run_episode(seed: int, pilot_policy: Policy, enemy_policy: Policy, max_steps
         enemy_drop_rate=float(info.get("dropAttempts", 0)) / max(1, game.steps),
         invalid_drop_rate=float(info.get("invalidDrops", 0)) / drop_attempts,
         enemy_fire_rate=float(info.get("enemyFires", 0)) / max(1, game.steps),
-        pilot_fire_rate=float(info.get("pilotFires", 0)) / max(1, game.steps),
+        pilot_fire_rate=float(pilot_fires) / max(1, game.steps),
+        pilot_hits=pilot_hits,
+        pilot_fires=pilot_fires,
+        pilot_shot_accuracy=float(pilot_hits) / max(1, pilot_fires),
+        wave_cleared=wave_cleared,
         lives_left=int(info.get("lives", 0)),
     )
 
@@ -1324,16 +1491,24 @@ def evaluate(seed: int, pilot_policy: Policy, enemy_policy: Policy, episodes: in
 def summarize_episode_results(results: list[EpisodeResult], episodes: int) -> dict[str, object]:
     pilot_wins = sum(1 for result in results if result.winner == "pilot")
     enemy_wins = sum(1 for result in results if result.winner == "enemies")
+    wave_clear_steps = [result.steps for result in results if result.wave_cleared]
+    pilot_hits = sum(result.pilot_hits for result in results)
+    pilot_fires = sum(result.pilot_fires for result in results)
     return {
         "pilotWinRate": round(pilot_wins / max(1, episodes), 4),
         "enemyWinRate": round(enemy_wins / max(1, episodes), 4),
         "averageScore": round(float(np.mean([result.score for result in results])), 2),
         "averageWave": round(float(np.mean([result.wave for result in results])), 2),
         "averageSteps": round(float(np.mean([result.steps for result in results])), 2),
+        "waveClearRate": round(len(wave_clear_steps) / max(1, episodes), 4),
+        "averageClearSteps": round(float(np.mean(wave_clear_steps)), 2) if wave_clear_steps else 0.0,
         "enemyDropRate": round(float(np.mean([result.enemy_drop_rate for result in results])), 4),
         "invalidDropRate": round(float(np.mean([result.invalid_drop_rate for result in results])), 4),
         "enemyFireRate": round(float(np.mean([result.enemy_fire_rate for result in results])), 4),
         "pilotFireRate": round(float(np.mean([result.pilot_fire_rate for result in results])), 4),
+        "pilotShotAccuracy": round(pilot_hits / max(1, pilot_fires), 4),
+        "pilotHits": pilot_hits,
+        "pilotFires": pilot_fires,
     }
 
 
@@ -1417,6 +1592,9 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
             "enemyDropRate": float(latest["enemyDropRate"]),
             "invalidDropRate": float(latest["invalidDropRate"]),
             "enemyFireRate": float(latest["enemyFireRate"]),
+            "pilotShotAccuracy": float(latest.get("pilotShotAccuracy", 0.0)),
+            "waveClearRate": float(latest.get("waveClearRate", 0.0)),
+            "averageClearSteps": float(latest.get("averageClearSteps", 0.0)),
             "selfPlay": self_play_metrics,
         },
     }
@@ -1441,6 +1619,11 @@ def main() -> None:
     parser.add_argument("--dominance-threshold", type=float, default=0.6)
     parser.add_argument("--max-phase-iterations", type=int, default=3)
     parser.add_argument("--generations-per-side", type=int, default=None)
+    parser.add_argument("--balanced-rounds", type=int, default=None, help="Maximum adaptive dominance-balanced generations.")
+    parser.add_argument("--min-balanced-rounds", type=int, default=6)
+    parser.add_argument("--balance-tolerance", type=float, default=0.18)
+    parser.add_argument("--balance-patience", type=int, default=3)
+    parser.add_argument("--balance-min-win-rate", type=float, default=0.25)
     parser.add_argument("--rounds", type=int, default=None, help="Deprecated fixed alternation phase count.")
     parser.add_argument("--timesteps-per-round", type=int, default=None, help="Deprecated alias for --phase-timesteps.")
     parser.add_argument("--eval-episodes", type=int, default=40)
@@ -1464,6 +1647,11 @@ def main() -> None:
         dominance_threshold=args.dominance_threshold,
         max_phase_iterations=args.max_phase_iterations,
         generations_per_side=args.generations_per_side,
+        balanced_rounds=args.balanced_rounds,
+        min_balanced_rounds=args.min_balanced_rounds,
+        balance_tolerance=args.balance_tolerance,
+        balance_patience=args.balance_patience,
+        balance_min_win_rate=args.balance_min_win_rate,
         rounds=args.rounds,
         timesteps_per_round=args.timesteps_per_round,
         progress=not args.no_progress,
@@ -1481,6 +1669,11 @@ def main() -> None:
                 "algorithm": "stable-baselines3-dqn",
                 "cycles": self_play["cycles"],
                 "generationsPerSide": self_play["generationsPerSide"],
+                "balancedRounds": self_play["balancedRounds"],
+                "minBalancedRounds": self_play["minBalancedRounds"],
+                "balanceTolerance": self_play["balanceTolerance"],
+                "balancePatience": self_play["balancePatience"],
+                "balanceMinWinRate": self_play["balanceMinWinRate"],
                 "phaseTimesteps": self_play["phaseTimesteps"],
                 "dominanceThreshold": self_play["dominanceThreshold"],
                 "maxPhaseIterations": self_play["maxPhaseIterations"],
