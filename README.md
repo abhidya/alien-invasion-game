@@ -50,7 +50,7 @@ python3.12 -m venv .venv-rl
 . .venv-rl/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements-static-pilot.txt
-python tools/train_static_pilot.py --generations-per-side 100 --phase-timesteps 500 --max-phase-iterations 5 --eval-episodes 8 --max-steps 320 --dominance-threshold 0.6 --train-workers 4 --eval-workers 4
+python tools/train_static_pilot.py --balanced-rounds 48 --min-balanced-rounds 12 --balance-tolerance 0.2 --balance-patience 3 --balance-min-win-rate 0.25 --phase-timesteps 900 --max-phase-iterations 4 --eval-episodes 10 --max-steps 360 --dominance-threshold 0.65 --train-workers 4 --eval-workers 4
 ```
 
 The RL requirements stay on the newest SB3 line that installs with this Python
@@ -66,43 +66,51 @@ Latest checked-in training run:
   "model": "js/galagai-model.json",
   "algorithm": "stable-baselines3-dqn",
   "cycles": 2,
-  "generationsPerSide": 100,
-  "phaseTimesteps": 500,
-  "dominanceThreshold": 0.6,
-  "maxPhaseIterations": 5,
+  "generationsPerSide": null,
+  "balancedRounds": 18,
+  "minBalancedRounds": 12,
+  "balanceTolerance": 0.2,
+  "balancePatience": 3,
+  "balanceMinWinRate": 0.25,
+  "phaseTimesteps": 900,
+  "dominanceThreshold": 0.65,
+  "maxPhaseIterations": 4,
   "netArch": [
     64,
     64
   ],
-  "roundsCompleted": 200,
+  "roundsCompleted": 18,
   "checkpointCounts": {
-    "pilot": 100,
-    "enemies": 100
+    "pilot": 16,
+    "enemies": 2
   },
-  "evalEpisodes": 8,
+  "evalEpisodes": 10,
   "artifact": {
-    "manifestBytes": 208186,
-    "checkpointFiles": 200,
-    "checkpointBytes": 10207606
+    "manifestBytes": 23763,
+    "checkpointFiles": 18,
+    "checkpointBytes": 901490
   },
   "selfPlayLatest": {
-    "round": 200,
-    "phase": 92,
-    "phaseIteration": 1,
-    "trained": "enemies",
-    "generation": 100,
-    "dominanceMetric": "enemyWinRate",
-    "dominanceThreshold": 0.6,
+    "round": 18,
+    "phase": 5,
+    "phaseIteration": 4,
+    "trained": "pilot",
+    "generation": 16,
+    "dominanceMetric": "pilotWinRate",
+    "dominanceThreshold": 0.65,
     "dominanceReached": true,
-    "pilotWinRate": 0.0,
-    "enemyWinRate": 1.0,
-    "averageScore": 300.0,
-    "averageWave": 1.0,
-    "averageSteps": 60.0,
+    "pilotWinRate": 1.0,
+    "enemyWinRate": 0.0,
+    "averageScore": 1600.0,
+    "averageWave": 2.0,
+    "averageSteps": 360.0,
+    "waveClearRate": 1.0,
+    "averageClearSteps": 360.0,
     "enemyDropRate": 0.0,
     "invalidDropRate": 0.0,
-    "enemyFireRate": 0.8,
-    "pilotFireRate": 0.35
+    "enemyFireRate": 0.0,
+    "pilotFireRate": 0.3306,
+    "pilotShotAccuracy": 0.2017
   }
 }
 ```
