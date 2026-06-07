@@ -275,7 +275,9 @@
           homeY: 74 + row * gapY,
           free: false,
           loop: false,
-          scatter: 0
+          scatter: 0,
+          shotCooldown: 0,
+          downCooldown: 0
         });
       }
     }
@@ -435,9 +437,9 @@
     if (action === "fire") fire();
   }
 
-  function predictModelAction(model, fallback) {
+  function predictModelAction(model, fallback, featureOverride) {
     if (!model) return fallback;
-    var features = modelFeatures(model);
+    var features = modelFeatures(model, featureOverride);
     var scores = model.network ? evaluateNetwork(model.network, features) : null;
     var bestAction = fallback;
     var bestScoreForAction = -Infinity;
@@ -455,8 +457,8 @@
     return bestAction;
   }
 
-  function modelFeatures(model) {
-    var features = pilotFeatures();
+  function modelFeatures(model, featureOverride) {
+    var features = featureOverride || pilotFeatures();
     var expected = Array.isArray(model.features) ? model.features.length : features.length;
     return features.slice(0, expected);
   }
@@ -485,49 +487,65 @@
     var liveAliens = state.aliens.filter(function (alien) { return alien.alive; });
     if (!liveAliens.length) return;
 
-    enemyAction = applyEnemyAction(predictModelAction(enemyModel, "drift_right"), liveAliens);
+    var summary = { left: 0, right: 0, down: 0, fire: 0, invalid: 0 };
+    liveAliens.forEach(function (alien) {
+      var action = predictModelAction(enemyModel, "hold", enemyFeatures(alien));
+      applyEnemyShipAction(action, alien, summary);
+    });
+    enemyAction = enemyActionSummary(summary);
     enemyThinkCooldown = Math.max(0.08, 0.20 - state.wave * 0.01);
     updateHud();
   }
 
-  function applyEnemyAction(action, liveAliens) {
-    if (action === "drift_left") {
-      state.fleetDirection = -1;
-      return "bees drift left";
+  function applyEnemyShipAction(action, alien, summary) {
+    if (!alien || !alien.alive) return;
+    action = normalizeEnemyShipAction(action);
+    if (action === "left" || action === "left_fire") {
+      alien.x -= 32;
+      wrapAlienHorizontal(alien);
+      summary.left += 1;
+    } else if (action === "right" || action === "right_fire") {
+      alien.x += 32;
+      wrapAlienHorizontal(alien);
+      summary.right += 1;
     }
-    if (action === "drift_right") {
-      state.fleetDirection = 1;
-      return "bees drift right";
+    if (action === "down" || action === "down_fire") {
+      if ((alien.downCooldown || 0) <= 0) {
+        alien.y += state.fleetDrop * 0.7;
+        alien.downCooldown = 0.45;
+        summary.down += 1;
+      } else {
+        summary.invalid += 1;
+      }
     }
-    if (action === "drift_left_fire") {
-      state.fleetDirection = -1;
-      return fireRoleShot(["boss", "butterfly"]) ? "boss/butterfly left+fire" : "bees drift left";
+    if (action.indexOf("fire") !== -1) {
+      if (summary.fire < 4 && fireAlienShot(alien)) {
+        summary.fire += 1;
+      } else {
+        summary.invalid += 1;
+      }
     }
-    if (action === "drift_right_fire") {
-      state.fleetDirection = 1;
-      return fireRoleShot(["boss", "butterfly"]) ? "boss/butterfly right+fire" : "bees drift right";
-    }
-    if (action === "drop") {
-      if (enemyDropCooldown > 0) return "drop-cooldown";
-      liveAliens.filter(function (alien) { return alien.role === "bee"; }).forEach(function (alien) {
-        alien.y += state.fleetDrop * 0.65;
-      });
-      enemyDropCooldown = 1.08;
-      return "bees drop";
-    }
-    if (action === "fire") {
-      return fireRoleShot(["boss", "butterfly"]) ? "boss/butterfly fire" : "bees drift";
-    }
-    if (action === "dive") {
-      return launchRoleDive(["butterfly", "boss"]) ? "butterfly dive" : "bees drift";
-    }
-    if (action === "loop") {
-      return startRoleLoop(["boss"]) ? "boss loop" : "butterfly weave";
-    }
-    if (action === "scatter") {
-      return scatterRoles(["butterfly", "boss"]) ? "butterflies scatter" : "bees drift";
-    }
-    return "hold";
+  }
+
+  function normalizeEnemyShipAction(action) {
+    if (action === "drift_left") return "left";
+    if (action === "drift_right") return "right";
+    if (action === "drift_left_fire") return "left_fire";
+    if (action === "drift_right_fire") return "right_fire";
+    if (action === "drop" || action === "dive") return "down";
+    if (action === "loop") return "down_fire";
+    if (action === "scatter") return "left";
+    return action || "hold";
+  }
+
+  function enemyActionSummary(summary) {
+    var parts = [];
+    if (summary.left) parts.push(summary.left + " left");
+    if (summary.right) parts.push(summary.right + " right");
+    if (summary.down) parts.push(summary.down + " down");
+    if (summary.fire) parts.push(summary.fire + " fire");
+    if (!parts.length && summary.invalid) return "blocked";
+    return parts.length ? parts.join(", ") : "hold";
   }
 
   function fireRoleShot(roles) {
@@ -651,6 +669,38 @@
     ];
   }
 
+  function enemyFeatures(alien) {
+    var features = pilotFeatures();
+    var shipCenter = state.ship.x + state.ship.width / 2;
+    features.push(clamp(((alien.x + alien.width / 2) - shipCenter) / (canvas.width / 2), -1, 1));
+    features.push(clamp(alien.y / canvas.height, 0, 1));
+    features.push(enemyRoleValue(alien.role));
+    features.push(canAlienFire(alien) ? 1 : 0);
+    features.push(pilotBulletLaneFor(alien));
+    features.push(clamp((alien.y + alien.height) / canvas.height, 0, 1));
+    return features;
+  }
+
+  function enemyRoleValue(role) {
+    if (role === "boss") return 1;
+    if (role === "butterfly") return 0.5;
+    return 0;
+  }
+
+  function canAlienFire(alien) {
+    return alien && alien.alive &&
+      (alien.role === "butterfly" || alien.role === "boss") &&
+      (alien.shotCooldown || 0) <= 0;
+  }
+
+  function pilotBulletLaneFor(alien) {
+    var best = 0;
+    state.bullets.forEach(function (bullet) {
+      best = Math.max(best, shotLaneOverlap(bullet, alien));
+    });
+    return best;
+  }
+
   function dangerousEnemyShot(shipCenter) {
     return state.enemyShots.slice().sort(function (a, b) {
       return enemyShotDangerScore(b, shipCenter) - enemyShotDangerScore(a, shipCenter);
@@ -743,6 +793,8 @@
     var formationAliens = liveAliens.filter(function (alien) { return !alien.free; });
     liveAliens.forEach(function (alien) {
       alien.wobble += dt * 5;
+      alien.shotCooldown = Math.max(0, (alien.shotCooldown || 0) - dt);
+      alien.downCooldown = Math.max(0, (alien.downCooldown || 0) - dt);
       if (alien.free) {
         updateFreeAlien(alien, dt);
       } else {
@@ -803,7 +855,7 @@
   }
 
   function fireAlienShot(alien) {
-    if (!alien) return;
+    if (!canAlienFire(alien)) return false;
     state.enemyShots.push({
       x: alien.x + alien.width / 2 - 3,
       y: alien.y + alien.height,
@@ -811,6 +863,8 @@
       height: 16,
       speed: 210 + state.wave * 20
     });
+    alien.shotCooldown = 0.65;
+    return true;
   }
 
   function checkHits() {

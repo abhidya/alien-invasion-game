@@ -34,10 +34,10 @@ class TrainPublishTest(unittest.TestCase):
         )
 
     def test_default_checkpoint_dir_uses_current_schema_line(self):
-        self.assertEqual(train_publish.DEFAULT_CHECKPOINT_DIR, Path(".training-checkpoints/galagai-balanced-v13"))
+        self.assertEqual(train_publish.DEFAULT_CHECKPOINT_DIR, Path(".training-checkpoints/galagai-balanced-v14"))
 
     def test_add_rounds_command_requires_new_rounds_after_resume(self):
-        args = self._args(Path(".training-checkpoints/galagai-balanced-v13"))
+        args = self._args(Path(".training-checkpoints/galagai-balanced-v14"))
 
         command = train_publish.build_train_command(args, target_rounds=300, required_new_balanced_rounds=43)
 
@@ -77,7 +77,7 @@ class TrainPublishTest(unittest.TestCase):
 
     def test_public_manifest_check_retries_until_pages_updates(self):
         expected = {
-            "version": 13,
+            "version": 14,
             "pilotVersions": 18,
             "enemyVersions": 1,
             "latestPilot": "galagai-models/pilot-v023.json",
@@ -93,7 +93,7 @@ class TrainPublishTest(unittest.TestCase):
         )
         fresh = json.dumps(
             {
-                "version": 13,
+                "version": 14,
                 "versions": {"pilot": [{} for _ in range(18)], "enemies": [{}]},
                 "networkRef": "galagai-models/pilot-v023.json",
                 "enemies": {"networkRef": "galagai-models/enemies-v001.json"},

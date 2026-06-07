@@ -9,9 +9,10 @@ from tools import train_static_pilot
 class StaticPilotArtifactTest(unittest.TestCase):
     def test_environment_penalizes_drop_spam(self):
         env = train_static_pilot.HeadlessGalagai(seed=12, max_steps=20)
+        alien = env.aliens[0]
 
-        _, _, first_enemy_reward, _, first_info = env.step(3, 2)
-        _, _, second_enemy_reward, _, second_info = env.step(3, 2)
+        _, _, first_enemy_reward, _, first_info = env.step(3, [(alien, 3)])
+        _, _, second_enemy_reward, _, second_info = env.step(3, [(alien, 3)])
 
         self.assertTrue(first_info["events"].valid_drop)
         self.assertFalse(first_info["events"].invalid_drop)
@@ -53,6 +54,29 @@ class StaticPilotArtifactTest(unittest.TestCase):
         env.wrap_alien_horizontal(alien)
 
         self.assertEqual(alien.x, train_static_pilot.CANVAS_WIDTH)
+
+    def test_enemy_ai_controls_individual_ships(self):
+        env = train_static_pilot.HeadlessGalagai(seed=26, max_steps=20)
+        first = env.aliens[0]
+        second = env.aliens[1]
+        first_x = first.x
+        second_x = second.x
+
+        env.apply_enemy_actions([(first, 1), (second, 2)])
+
+        self.assertLess(first.x, first_x)
+        self.assertGreater(second.x, second_x)
+
+    def test_multiple_enemy_ships_can_fire_independently(self):
+        env = train_static_pilot.HeadlessGalagai(seed=27, max_steps=20)
+        env.wave = 2
+        env.aliens = env.create_fleet(2)
+        shooters = [alien for alien in env.aliens if alien.role == "butterfly"][:2]
+
+        events = env.apply_enemy_actions([(shooters[0], 7), (shooters[1], 7)])
+
+        self.assertEqual(events["enemy_fires"], 2)
+        self.assertEqual(len(env.enemy_shots), 2)
 
     def test_pilot_wraps_horizontally_instead_of_clamping(self):
         env = train_static_pilot.HeadlessGalagai(seed=25, max_steps=20)
@@ -133,17 +157,17 @@ class StaticPilotArtifactTest(unittest.TestCase):
         policy = train_static_pilot.OpeningEnemyPolicy()
         wave_one = train_static_pilot.HeadlessGalagai(seed=17, max_steps=20)
 
-        self.assertNotIn(policy.act(wave_one.features()), {1, 4, 5, 6, 7})
+        self.assertNotIn(policy.act(wave_one.enemy_control_observation()), {4, 5, 6, 7})
 
         wave_two = train_static_pilot.HeadlessGalagai(seed=18, max_steps=20)
         wave_two.start_wave = 2
         wave_two.wave = 2
         wave_two.aliens = wave_two.create_fleet(2)
 
-        action = policy.act(wave_two.features())
+        action = policy.act(wave_two.enemy_control_observation())
         _, _, _, _, info = wave_two.step(3, action)
 
-        self.assertIn(action, {1, 4, 5})
+        self.assertIn(action, {4, 5, 7})
         self.assertTrue(info["events"].enemy_fired)
 
     def test_curriculum_start_wave_does_not_count_as_free_pilot_win(self):
@@ -401,7 +425,7 @@ class StaticPilotArtifactTest(unittest.TestCase):
             pilot_payload = json.loads((path.parent / payload["networkRef"]).read_text(encoding="utf-8"))
             enemy_payload = json.loads((path.parent / payload["enemies"]["networkRef"]).read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["version"], 13)
+        self.assertEqual(payload["version"], 14)
         self.assertEqual(payload["algorithm"], "stable-baselines3-dqn")
         self.assertEqual(payload["actions"], train_static_pilot.PILOT_ACTIONS)
         self.assertEqual(payload["features"], train_static_pilot.FEATURES)
