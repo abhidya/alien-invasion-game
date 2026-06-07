@@ -14,7 +14,7 @@ from typing import Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v11")
+DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v12")
 DEFAULT_MODEL = Path("js/galagai-model.json")
 STATIC_PAGE_PATHS = [
     Path("index.html"),
@@ -136,6 +136,8 @@ def build_train_command(
         str(args.eval_workers),
         "--curriculum-waves",
         str(args.curriculum_waves),
+        "--candidate-spawns",
+        str(args.candidate_spawns),
         "--checkpoint-retention",
         args.checkpoint_retention,
         "--keep-latest-versions",
@@ -344,6 +346,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=360)
     parser.add_argument("--dominance-threshold", type=float, default=0.65)
     parser.add_argument("--curriculum-waves", type=int, default=3)
+    parser.add_argument("--candidate-spawns", type=int, default=1)
     parser.add_argument("--min-balanced-rounds", type=int, default=12)
     parser.add_argument("--balance-tolerance", type=float, default=0.2)
     parser.add_argument("--balance-patience", type=int, default=3)

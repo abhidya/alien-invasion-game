@@ -28,6 +28,63 @@ class StaticPilotArtifactTest(unittest.TestCase):
         self.assertFalse(info["events"].enemy_fired)
         self.assertEqual(info["enemyFires"], 0)
 
+    def test_enemy_reaching_bottom_dies_without_pilot_life_loss(self):
+        env = train_static_pilot.HeadlessGalagai(seed=20, max_steps=20)
+        alien = env.aliens[0]
+        alien.x = 18
+        alien.y = train_static_pilot.CANVAS_HEIGHT - alien.height + 1
+        lives_before = env.lives
+
+        env.update_aliens()
+
+        self.assertFalse(alien.alive)
+        self.assertEqual(env.lives, lives_before)
+
+    def test_enemy_wraps_horizontally_instead_of_resetting(self):
+        env = train_static_pilot.HeadlessGalagai(seed=22, max_steps=20)
+        alien = env.aliens[0]
+        alien.x = train_static_pilot.CANVAS_WIDTH + 1
+
+        env.wrap_alien_horizontal(alien)
+
+        self.assertEqual(alien.x, -alien.width)
+
+        alien.x = -alien.width - 1
+        env.wrap_alien_horizontal(alien)
+
+        self.assertEqual(alien.x, train_static_pilot.CANVAS_WIDTH)
+
+    def test_enemy_crashing_into_pilot_kills_both(self):
+        env = train_static_pilot.HeadlessGalagai(seed=23, max_steps=20)
+        alien = env.aliens[0]
+        alien.x = env.ship.x
+        alien.y = env.ship.y
+        lives_before = env.lives
+
+        env.update_aliens()
+
+        self.assertFalse(alien.alive)
+        self.assertEqual(env.lives, lives_before - 1)
+
+    def test_pilot_can_move_up_and_down_with_bounds(self):
+        env = train_static_pilot.HeadlessGalagai(seed=24, max_steps=20)
+        start_y = env.ship.y
+
+        env.step(4, 0)
+        up_y = env.ship.y
+        env.step(5, 0)
+
+        self.assertLess(up_y, start_y)
+        self.assertGreater(env.ship.y, up_y)
+
+        env.ship.y = train_static_pilot.SHIP_MIN_Y - 100
+        env.step(4, 0)
+        self.assertEqual(env.ship.y, train_static_pilot.SHIP_MIN_Y)
+
+        env.ship.y = train_static_pilot.SHIP_MAX_Y + 100
+        env.step(5, 0)
+        self.assertEqual(env.ship.y, train_static_pilot.SHIP_MAX_Y)
+
     def test_observation_exposes_incoming_shots_and_pilot_bullets(self):
         env = train_static_pilot.HeadlessGalagai(seed=16, max_steps=20)
         ship_center = env.ship.center_x
@@ -224,6 +281,39 @@ class StaticPilotArtifactTest(unittest.TestCase):
         self.assertNotIn(101, retained)
         self.assertNotIn(111, retained)
 
+    def test_candidate_selection_scores_role_specific_metrics(self):
+        pilot_results = [
+            train_static_pilot.CandidateResult(
+                spawn_index=1,
+                metrics={"pilotWinRate": 0.1, "waveClearRate": 0.8, "pilotShotAccuracy": 0.9},
+                model_path="pilot-1.zip",
+                replay_path="pilot-1.pkl",
+            ),
+            train_static_pilot.CandidateResult(
+                spawn_index=2,
+                metrics={"pilotWinRate": 0.2, "waveClearRate": 0.1, "pilotShotAccuracy": 0.1},
+                model_path="pilot-2.zip",
+                replay_path="pilot-2.pkl",
+            ),
+        ]
+        enemy_results = [
+            train_static_pilot.CandidateResult(
+                spawn_index=1,
+                metrics={"enemyWinRate": 0.5, "enemyFireRate": 0.8, "invalidDropRate": 0.0},
+                model_path="enemy-1.zip",
+                replay_path="enemy-1.pkl",
+            ),
+            train_static_pilot.CandidateResult(
+                spawn_index=2,
+                metrics={"enemyWinRate": 0.5, "enemyFireRate": 0.4, "invalidDropRate": 0.0},
+                model_path="enemy-2.zip",
+                replay_path="enemy-2.pkl",
+            ),
+        ]
+
+        self.assertEqual(train_static_pilot.best_candidate_result(pilot_results, "pilot").spawn_index, 2)
+        self.assertEqual(train_static_pilot.best_candidate_result(enemy_results, "enemies").spawn_index, 1)
+
     def test_checkpoint_store_prunes_export_files_without_reusing_generation_ids(self):
         retention = train_static_pilot.CheckpointRetention(mode="tiered", keep_latest=2)
         entries = [{"id": index, "role": "pilot"} for index in range(1, 8)]
@@ -266,7 +356,7 @@ class StaticPilotArtifactTest(unittest.TestCase):
             pilot_payload = json.loads((path.parent / payload["networkRef"]).read_text(encoding="utf-8"))
             enemy_payload = json.loads((path.parent / payload["enemies"]["networkRef"]).read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["version"], 11)
+        self.assertEqual(payload["version"], 12)
         self.assertEqual(payload["algorithm"], "stable-baselines3-dqn")
         self.assertEqual(payload["actions"], train_static_pilot.PILOT_ACTIONS)
         self.assertEqual(payload["features"], train_static_pilot.FEATURES)

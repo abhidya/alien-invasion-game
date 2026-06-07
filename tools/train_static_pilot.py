@@ -32,7 +32,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 from tqdm.auto import tqdm
 
 
-PILOT_ACTIONS = ["left", "right", "fire", "stay"]
+PILOT_ACTIONS = ["left", "right", "fire", "stay", "up", "down"]
 ENEMY_ACTIONS = [
     "drift_left",
     "drift_left_fire",
@@ -64,6 +64,8 @@ FEATURES = [
     "bee_count",
     "gunship_count",
     "boss_count",
+    "ship_y",
+    "target_dy",
 ]
 
 CANVAS_WIDTH = 960.0
@@ -72,6 +74,9 @@ SHIP_WIDTH = 64.0
 SHIP_HEIGHT = 48.0
 SHIP_Y = CANVAS_HEIGHT - 72.0
 SHIP_SPEED = 470.0
+SHIP_VERTICAL_SPEED = 330.0
+SHIP_MIN_Y = CANVAS_HEIGHT - 170.0
+SHIP_MAX_Y = CANVAS_HEIGHT - 56.0
 BULLET_SPEED = 620.0
 ENEMY_SHOT_SPEED = 230.0
 ALIEN_WIDTH = 48.0
@@ -82,10 +87,10 @@ ACTION_DT = 0.12
 DROP_COOLDOWN_SECONDS = 1.08
 ENEMY_SHOT_COOLDOWN_SECONDS = 0.0
 INVALID_DROP_PENALTY = 0.90
-MODEL_SCHEMA_VERSION = 11
+MODEL_SCHEMA_VERSION = 12
 DQN_NET_ARCH = [64, 64]
 MODEL_FILE_DIR = "galagai-models"
-DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v11")
+DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v12")
 RETENTION_LATEST_DEFAULT = 12
 
 
@@ -120,6 +125,10 @@ class Actor:
     @property
     def center_x(self) -> float:
         return self.x + self.width / 2.0
+
+    @property
+    def center_y(self) -> float:
+        return self.y + self.height / 2.0
 
     @property
     def bottom(self) -> float:
@@ -185,6 +194,14 @@ class LoadedTrainingState:
     phase_number: int
 
 
+@dataclass(frozen=True)
+class CandidateResult:
+    spawn_index: int
+    metrics: dict[str, object]
+    model_path: str
+    replay_path: str
+
+
 PolicySpec = dict[str, object]
 
 
@@ -202,12 +219,17 @@ class HeuristicPilotPolicy:
         danger_dx = float(observation[11]) if len(observation) > 13 else threat_dx
         danger_y = float(observation[12]) if len(observation) > 13 else threat_y
         danger_lane = float(observation[13]) if len(observation) > 13 else 0.0
+        target_dy = float(observation[20]) if len(observation) > 20 else 0.0
         if danger_y > 0.44 and danger_lane > 0.20:
             return 0 if danger_dx >= 0 else 1
         if threat_y > 0.74 and abs(threat_dx) < 0.18:
             return 0 if threat_dx >= 0 else 1
         if bullet_ready and abs(target_dx) < 0.10:
             return 2
+        if abs(target_dx) < 0.16 and target_dy < -0.24:
+            return 4
+        if abs(target_dx) < 0.16 and target_dy > 0.18:
+            return 5
         if target_dx < -0.08:
             return 0
         if target_dx > 0.08:
@@ -378,6 +400,11 @@ class HeadlessGalagai:
         live_aliens = [alien for alien in self.aliens if alien.alive]
         target = min(live_aliens, key=lambda alien: abs(alien.center_x - ship_center), default=None)
         target_dx = self._relative_x(target.center_x - ship_center) if target else 0.0
+        target_dy = self._clamp(
+            ((target.center_y - self.ship.center_y) / CANVAS_HEIGHT) if target else 0.0,
+            -1.0,
+            1.0,
+        )
 
         closest_shot = min(self.enemy_shots, key=lambda shot: abs(shot.center_x - ship_center), default=None)
         danger_shot = self.dangerous_enemy_shot()
@@ -424,6 +451,8 @@ class HeadlessGalagai:
                 self._clamp01(bee_count / MAX_ALIENS_NORMALIZER),
                 self._clamp01(gunship_count / MAX_ALIENS_NORMALIZER),
                 self._clamp01(boss_count / MAX_ALIENS_NORMALIZER),
+                self._clamp01(self.ship.y / CANVAS_HEIGHT),
+                target_dy,
             ],
             dtype=np.float32,
         )
@@ -450,7 +479,8 @@ class HeadlessGalagai:
         fleet_y = float(action_features[9])
         pilot_bullet_dx = float(action_features[14])
         pilot_bullet_y = float(action_features[15])
-        pilot_aligned_action = self.is_pilot_aligned_action(pilot_action, target_dx)
+        target_dy = float(action_features[20])
+        pilot_aligned_action = self.is_pilot_aligned_action(pilot_action, target_dx, target_dy)
         pilot_aligned_fire = pilot_action == 2 and self.fire_cooldown <= 0 and abs(target_dx) < 0.16
         pilot_bad_fire = pilot_action == 2 and self.fire_cooldown <= 0 and abs(target_dx) > 0.30
         enemy_tactical_action = self.is_enemy_tactical_action(enemy_action, target_dx, fleet_y, pilot_bullet_dx, pilot_bullet_y)
@@ -461,9 +491,14 @@ class HeadlessGalagai:
             self.ship.x += SHIP_SPEED * ACTION_DT
         elif pilot_action == 2:
             pilot_fired, pilot_missed = self.fire_pilot_bullet()
+        elif pilot_action == 4:
+            self.ship.y -= SHIP_VERTICAL_SPEED * ACTION_DT
+        elif pilot_action == 5:
+            self.ship.y += SHIP_VERTICAL_SPEED * ACTION_DT
         elif pilot_action != 3:
             raise ValueError(f"Unknown pilot action {pilot_action}.")
         self.ship.x = self._clamp(self.ship.x, 18.0, CANVAS_WIDTH - SHIP_WIDTH - 18.0)
+        self.ship.y = self._clamp(self.ship.y, SHIP_MIN_Y, SHIP_MAX_Y)
 
         if enemy_action == 0:
             self.fleet_direction = -1
@@ -661,19 +696,21 @@ class HeadlessGalagai:
         live_aliens = [alien for alien in self.aliens if alien.alive]
         if not live_aliens:
             return
-        hit_edge = any(
-            alien.x + self.fleet_direction * self.fleet_speed * ACTION_DT < 16.0
-            or alien.x + ALIEN_WIDTH + self.fleet_direction * self.fleet_speed * ACTION_DT > CANVAS_WIDTH - 16.0
-            for alien in live_aliens
-        )
-        if hit_edge:
-            self.fleet_direction *= -1
-            for alien in live_aliens:
-                alien.y += FLEET_DROP
         for alien in live_aliens:
             alien.x += self.fleet_direction * self.fleet_speed * ACTION_DT
-            if alien.bottom >= self.ship.y and self.invulnerability <= 0:
+            self.wrap_alien_horizontal(alien)
+            if alien.alive and self.intersects(alien, self.ship) and self.invulnerability <= 0:
+                alien.alive = False
                 self.lose_life()
+            elif alien.bottom >= CANVAS_HEIGHT:
+                alien.alive = False
+
+    @staticmethod
+    def wrap_alien_horizontal(alien: Actor) -> None:
+        if alien.x + alien.width < 0.0:
+            alien.x = CANVAS_WIDTH
+        elif alien.x > CANVAS_WIDTH:
+            alien.x = -alien.width
 
     def resolve_collisions(self) -> dict[str, int]:
         aliens_hit = 0
@@ -702,6 +739,7 @@ class HeadlessGalagai:
         self.invulnerability = 0.45
         self.enemy_shots.clear()
         self.ship.x = CANVAS_WIDTH / 2.0 - SHIP_WIDTH / 2.0
+        self.ship.y = SHIP_Y
 
     def pilot_reward(self, events: StepEvents, done: bool) -> float:
         reward = events.score_gain / 35.0
@@ -758,7 +796,7 @@ class HeadlessGalagai:
         return "timeout"
 
     @staticmethod
-    def is_pilot_aligned_action(action: int, target_dx: float) -> bool:
+    def is_pilot_aligned_action(action: int, target_dx: float, target_dy: float = 0.0) -> bool:
         if action == 0:
             return target_dx < -0.06
         if action == 1:
@@ -767,6 +805,10 @@ class HeadlessGalagai:
             return abs(target_dx) < 0.16
         if action == 3:
             return abs(target_dx) < 0.05
+        if action == 4:
+            return target_dy < -0.08
+        if action == 5:
+            return target_dy > 0.08
         return False
 
     @staticmethod
@@ -953,6 +995,173 @@ def make_dqn(env: Any, seed: int, learning_rate: float) -> DQN:
         seed=seed,
         verbose=0,
     )
+
+
+def train_role_model(
+    *,
+    role: str,
+    model: DQN | None,
+    opponent_spec: PolicySpec,
+    seed: int,
+    phase_timesteps: int,
+    max_steps: int,
+    train_workers: int,
+    curriculum_waves: int,
+) -> DQN:
+    env = make_training_env(
+        role,
+        opponent_spec,
+        seed=seed,
+        max_steps=max_steps,
+        workers=train_workers,
+        max_start_wave=curriculum_waves,
+    )
+    try:
+        if model is None:
+            model = make_dqn(env, seed=seed, learning_rate=8e-4)
+        else:
+            model.set_env(env)
+            set_random_seed = getattr(model, "set_random_seed", None)
+            if callable(set_random_seed):
+                set_random_seed(seed)
+        model.learn(total_timesteps=phase_timesteps, reset_num_timesteps=False, progress_bar=False)
+        return model
+    finally:
+        close_training_env(env)
+
+
+def train_candidate_from_files(args: tuple[object, ...]) -> CandidateResult:
+    (
+        role,
+        spawn_index,
+        base_model_path,
+        base_replay_path,
+        opponent_spec,
+        seed,
+        eval_seed,
+        phase_timesteps,
+        max_steps,
+        train_workers,
+        eval_episodes,
+        eval_workers,
+        curriculum_waves,
+        output_dir,
+    ) = args
+    role = str(role)
+    spawn_index = int(spawn_index)
+    output_path = Path(str(output_dir))
+    base_model = None
+    if base_model_path is not None:
+        base_model = DQN.load(str(base_model_path))
+        if base_replay_path is not None and Path(str(base_replay_path)).exists():
+            base_model.load_replay_buffer(str(base_replay_path))
+
+    trained_model = train_role_model(
+        role=role,
+        model=base_model,
+        opponent_spec=opponent_spec,  # type: ignore[arg-type]
+        seed=int(seed),
+        phase_timesteps=int(phase_timesteps),
+        max_steps=int(max_steps),
+        train_workers=int(train_workers),
+        curriculum_waves=int(curriculum_waves),
+    )
+    candidate_spec = {
+        "kind": "network",
+        "role": role,
+        "network": export_network(trained_model),
+    }
+    if role == "pilot":
+        metrics = evaluate_policy_specs(
+            seed=int(eval_seed),
+            pilot_spec=candidate_spec,
+            enemy_spec=opponent_spec,  # type: ignore[arg-type]
+            episodes=int(eval_episodes),
+            max_steps=int(max_steps),
+            workers=int(eval_workers),
+            curriculum_waves=int(curriculum_waves),
+        )
+    else:
+        metrics = evaluate_policy_specs(
+            seed=int(eval_seed),
+            pilot_spec=opponent_spec,  # type: ignore[arg-type]
+            enemy_spec=candidate_spec,
+            episodes=int(eval_episodes),
+            max_steps=int(max_steps),
+            workers=int(eval_workers),
+            curriculum_waves=int(curriculum_waves),
+        )
+
+    model_path = output_path / f"{role}-candidate-{spawn_index}.zip"
+    replay_path = output_path / f"{role}-candidate-{spawn_index}-replay.pkl"
+    trained_model.save(model_path)
+    trained_model.save_replay_buffer(replay_path)
+    return CandidateResult(
+        spawn_index=spawn_index,
+        metrics=metrics,
+        model_path=str(model_path),
+        replay_path=str(replay_path),
+    )
+
+
+def save_candidate_base_model(model: DQN | None, directory: Path, role: str) -> tuple[str | None, str | None]:
+    if model is None:
+        return None, None
+    directory.mkdir(parents=True, exist_ok=True)
+    model_path = directory / f"{role}-base.zip"
+    replay_path = directory / f"{role}-base-replay.pkl"
+    model.save(model_path)
+    model.save_replay_buffer(replay_path)
+    return str(model_path), str(replay_path)
+
+
+def load_candidate_model(result: CandidateResult) -> DQN:
+    model = DQN.load(result.model_path)
+    replay_path = Path(result.replay_path)
+    if replay_path.exists():
+        model.load_replay_buffer(replay_path)
+    return model
+
+
+def candidate_score(result: CandidateResult, role: str) -> tuple[float, ...]:
+    metrics = result.metrics
+    if role == "pilot":
+        return (
+            float(metrics.get("pilotWinRate", 0.0)),
+            float(metrics.get("waveClearRate", 0.0)),
+            float(metrics.get("pilotShotAccuracy", 0.0)),
+            float(metrics.get("averageScore", 0.0)) / 10_000.0,
+            -float(metrics.get("averageSteps", 0.0)) / 1_000.0,
+        )
+    return (
+        float(metrics.get("enemyWinRate", 0.0)),
+        float(metrics.get("enemyFireRate", 0.0)),
+        -float(metrics.get("invalidDropRate", 0.0)),
+        -float(metrics.get("pilotShotAccuracy", 0.0)),
+        -float(metrics.get("averageScore", 0.0)) / 10_000.0,
+    )
+
+
+def best_candidate_result(results: list[CandidateResult], role: str) -> CandidateResult:
+    if not results:
+        raise RuntimeError("Candidate spawning produced no trained candidates.")
+    return max(results, key=lambda result: candidate_score(result, role))
+
+
+def candidate_metric_summary(results: list[CandidateResult]) -> list[dict[str, object]]:
+    summaries: list[dict[str, object]] = []
+    for result in results:
+        summaries.append(
+            {
+                "candidate": result.spawn_index,
+                **{
+                    key: value
+                    for key, value in result.metrics.items()
+                    if isinstance(value, (int, float, str, bool))
+                },
+            }
+        )
+    return summaries
 
 
 class TrainingProgress:
@@ -1309,6 +1518,7 @@ def train_self_play(
     train_workers: int = 1,
     eval_workers: int = 1,
     curriculum_waves: int = 3,
+    candidate_spawns: int = 1,
     checkpoint_retention: CheckpointRetention | None = None,
 ) -> tuple[DQN, DQN, dict[str, object]]:
     if timesteps_per_round is not None:
@@ -1318,6 +1528,7 @@ def train_self_play(
     train_workers = max(1, int(train_workers))
     eval_workers = max(1, int(eval_workers))
     curriculum_waves = max(1, int(curriculum_waves))
+    candidate_spawns = max(1, int(candidate_spawns))
     if balanced_rounds is not None:
         phase_roles = []
     elif generations_per_side is not None:
@@ -1371,6 +1582,7 @@ def train_self_play(
         "trainWorkers": train_workers,
         "evalWorkers": eval_workers,
         "curriculumWaves": curriculum_waves,
+        "candidateSpawns": candidate_spawns,
         "checkpointRetention": checkpoint_retention.to_json(),
     }
 
@@ -1382,53 +1594,113 @@ def train_self_play(
         round_number += 1
         current_phase_number = phase_number
         phase_seed = seed + phase_number * 1000 + phase_iteration * 97
-        env = None
+        candidate_results: list[CandidateResult] = []
+        selected_candidate = 1
         if role == "pilot":
-            env = make_training_env(
-                "pilot",
-                enemy_policy_spec(enemy_model),
-                seed=phase_seed,
-                max_steps=max_steps,
-                workers=train_workers,
-                max_start_wave=curriculum_waves,
-            )
-            try:
-                if pilot_model is None:
-                    pilot_model = make_dqn(env, seed=seed, learning_rate=8e-4)
-                else:
-                    pilot_model.set_env(env)
-                pilot_model.learn(total_timesteps=phase_timesteps, reset_num_timesteps=False, progress_bar=False)
-            finally:
-                close_training_env(env)
+            opponent_spec = enemy_policy_spec(enemy_model)
+            if candidate_spawns > 1:
+                with tempfile.TemporaryDirectory(prefix="galagai-pilot-candidates.") as tmpdir:
+                    candidate_dir = Path(tmpdir)
+                    base_model_path, base_replay_path = save_candidate_base_model(pilot_model, candidate_dir, "pilot")
+                    tasks = [
+                        (
+                            "pilot",
+                            spawn_index,
+                            base_model_path,
+                            base_replay_path,
+                            opponent_spec,
+                            phase_seed + spawn_index * 10_003,
+                            seed + round_number * 3000,
+                            phase_timesteps,
+                            max_steps,
+                            train_workers,
+                            eval_episodes,
+                            eval_workers,
+                            curriculum_waves,
+                            str(candidate_dir),
+                        )
+                        for spawn_index in range(1, candidate_spawns + 1)
+                    ]
+                    with ProcessPoolExecutor(max_workers=candidate_spawns) as executor:
+                        candidate_results = list(executor.map(train_candidate_from_files, tasks))
+                    selected = best_candidate_result(candidate_results, "pilot")
+                    selected_candidate = selected.spawn_index
+                    pilot_model = load_candidate_model(selected)
+                    metrics = selected.metrics
+            else:
+                pilot_model = train_role_model(
+                    role="pilot",
+                    model=pilot_model,
+                    opponent_spec=opponent_spec,
+                    seed=phase_seed,
+                    phase_timesteps=phase_timesteps,
+                    max_steps=max_steps,
+                    train_workers=train_workers,
+                    curriculum_waves=curriculum_waves,
+                )
+                metrics = evaluate_current_matchup(
+                    seed=seed + round_number * 3000,
+                    pilot_model=pilot_model,
+                    enemy_model=enemy_model,
+                    eval_episodes=eval_episodes,
+                    max_steps=max_steps,
+                    eval_workers=eval_workers,
+                    curriculum_waves=curriculum_waves,
+                )
             trained = "pilot"
         else:
-            env = make_training_env(
-                "enemies",
-                pilot_policy_spec(pilot_model),
-                seed=phase_seed,
-                max_steps=max_steps,
-                workers=train_workers,
-                max_start_wave=curriculum_waves,
-            )
-            try:
-                if enemy_model is None:
-                    enemy_model = make_dqn(env, seed=seed + 1, learning_rate=8e-4)
-                else:
-                    enemy_model.set_env(env)
-                enemy_model.learn(total_timesteps=phase_timesteps, reset_num_timesteps=False, progress_bar=False)
-            finally:
-                close_training_env(env)
+            opponent_spec = pilot_policy_spec(pilot_model)
+            if candidate_spawns > 1:
+                with tempfile.TemporaryDirectory(prefix="galagai-enemy-candidates.") as tmpdir:
+                    candidate_dir = Path(tmpdir)
+                    base_model_path, base_replay_path = save_candidate_base_model(enemy_model, candidate_dir, "enemies")
+                    tasks = [
+                        (
+                            "enemies",
+                            spawn_index,
+                            base_model_path,
+                            base_replay_path,
+                            opponent_spec,
+                            phase_seed + spawn_index * 10_003,
+                            seed + round_number * 3000,
+                            phase_timesteps,
+                            max_steps,
+                            train_workers,
+                            eval_episodes,
+                            eval_workers,
+                            curriculum_waves,
+                            str(candidate_dir),
+                        )
+                        for spawn_index in range(1, candidate_spawns + 1)
+                    ]
+                    with ProcessPoolExecutor(max_workers=candidate_spawns) as executor:
+                        candidate_results = list(executor.map(train_candidate_from_files, tasks))
+                    selected = best_candidate_result(candidate_results, "enemies")
+                    selected_candidate = selected.spawn_index
+                    enemy_model = load_candidate_model(selected)
+                    metrics = selected.metrics
+            else:
+                enemy_model = train_role_model(
+                    role="enemies",
+                    model=enemy_model,
+                    opponent_spec=opponent_spec,
+                    seed=phase_seed,
+                    phase_timesteps=phase_timesteps,
+                    max_steps=max_steps,
+                    train_workers=train_workers,
+                    curriculum_waves=curriculum_waves,
+                )
+                metrics = evaluate_current_matchup(
+                    seed=seed + round_number * 3000,
+                    pilot_model=pilot_model,
+                    enemy_model=enemy_model,
+                    eval_episodes=eval_episodes,
+                    max_steps=max_steps,
+                    eval_workers=eval_workers,
+                    curriculum_waves=curriculum_waves,
+                )
             trained = "enemies"
 
-        metrics = evaluate_current_matchup(
-            seed=seed + round_number * 3000,
-            pilot_model=pilot_model,
-            enemy_model=enemy_model,
-            eval_episodes=eval_episodes,
-            max_steps=max_steps,
-            eval_workers=eval_workers,
-            curriculum_waves=curriculum_waves,
-        )
         dominance_metric = "pilotWinRate" if trained == "pilot" else "enemyWinRate"
         dominance_reached = float(metrics[dominance_metric]) >= dominance_threshold
         generation = role_generation_count(history, trained) + 1
@@ -1441,8 +1713,12 @@ def train_self_play(
             "dominanceMetric": dominance_metric,
             "dominanceThreshold": dominance_threshold,
             "dominanceReached": dominance_reached,
+            "candidateSpawns": candidate_spawns,
+            "selectedCandidate": selected_candidate,
             **metrics,
         }
+        if candidate_results:
+            round_metrics["candidateMetrics"] = candidate_metric_summary(candidate_results)
         history.append(round_metrics)
 
         if trained == "pilot" and pilot_model is not None:
@@ -1581,6 +1857,7 @@ def train_self_play(
         "trainWorkers": train_workers,
         "evalWorkers": eval_workers,
         "curriculumWaves": curriculum_waves,
+        "candidateSpawns": candidate_spawns,
         "environment": {
             "name": "HeadlessGalagai",
             "openingEnemyPolicy": "role-gated bootstrap: bees drift/drop, butterflies and bosses can shoot after wave one",
@@ -1885,6 +2162,12 @@ def main() -> None:
         help="Randomize episode starts across waves 1..N so pilot/enemy policies train against later enemy roles.",
     )
     parser.add_argument(
+        "--candidate-spawns",
+        type=int,
+        default=1,
+        help="Train this many independent candidates per generation in parallel and keep the best evaluated candidate.",
+    )
+    parser.add_argument(
         "--checkpoint-retention",
         choices=("all", "tiered"),
         default="all",
@@ -1916,6 +2199,7 @@ def main() -> None:
         train_workers=args.train_workers,
         eval_workers=args.eval_workers,
         curriculum_waves=args.curriculum_waves,
+        candidate_spawns=args.candidate_spawns,
         checkpoint_retention=retention,
     )
     write_model(args.out, pilot_model, enemy_model, self_play)
@@ -1941,6 +2225,7 @@ def main() -> None:
                 "trainWorkers": self_play["trainWorkers"],
                 "evalWorkers": self_play["evalWorkers"],
                 "curriculumWaves": self_play["curriculumWaves"],
+                "candidateSpawns": self_play["candidateSpawns"],
                 "checkpointRetention": self_play["checkpointRetention"],
                 "totalGenerationCounts": self_play["totalGenerationCounts"],
                 "retainedCheckpointCounts": self_play["retainedCheckpointCounts"],

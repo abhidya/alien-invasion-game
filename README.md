@@ -54,7 +54,7 @@ python tools/train_publish.py --add-rounds 24
 ```
 
 `tools/train_publish.py` is the normal self-serve workflow. It resumes from
-`.training-checkpoints/galagai-balanced-v11`, trains the next balanced rounds,
+`.training-checkpoints/galagai-balanced-v12`, trains the next balanced rounds,
 exports static JSON, prunes retained model files, runs verification, commits and
 pushes `master`, mirrors the same static files to `gh-pages`, and checks the
 public Pages manifest. Use `--target-rounds <n>` instead of `--add-rounds` when
@@ -193,7 +193,7 @@ file is a legacy TensorFlow artifact preserved only for inspection.
 The CLI uses tqdm progress by default and prints ETA, side/generation counts,
 win-rate postfix metrics, drop/invalid-drop rates, and final artifact size
 summary. It checkpoints after every completed generation to
-`.training-checkpoints/galagai-balanced-v11` by default, including the SB3 model, replay
+`.training-checkpoints/galagai-balanced-v12` by default, including the SB3 model, replay
 buffer, exported generation JSON, and resumable `state.json`. Pass
 `--resume` to continue from that checkpoint directory, `--checkpoint-dir <path>`
 to change the location, `--no-checkpoints` for a throwaway run,
@@ -202,10 +202,13 @@ through 100, every 10th through 1000, and every 100th after that,
 `--train-workers <n>` for SB3 `SubprocVecEnv` rollout workers, and
 `--eval-workers <n>` for multi-process dominance evaluation. `--curriculum-waves`
 defaults to 3 so training samples later Galaga-style enemy roles, giving pilots
-incoming-shot awareness and enemies pilot-bullet awareness. Pass `--no-progress`
-for quiet CI logs. Prefer `tools/train_publish.py` for normal model pushes
-because it applies tiered retention, commits `master`, and publishes `gh-pages`
-in one verified workflow.
+incoming-shot awareness and enemies pilot-bullet awareness. `--candidate-spawns`
+trains multiple independent contenders per generation in parallel and keeps the
+best evaluated model; start with `--candidate-spawns 2 --train-workers 1`, then
+raise spawns if CPU is still idle. Pass `--no-progress` for quiet CI logs.
+Prefer `tools/train_publish.py` for normal model pushes because it applies
+tiered retention, commits `master`, and publishes `gh-pages` in one verified
+workflow.
 
 For a future Gymnasium adapter, `alien_invasion/gym_space.py` documents the
 modern `reset` and `step` shape:
