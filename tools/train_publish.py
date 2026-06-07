@@ -240,21 +240,6 @@ def publish_pages(summary: dict[str, object], *, no_push: bool) -> bool:
 
 
 def public_manifest_check(expected: dict[str, object]) -> None:
-    url = f"https://abhidya.github.io/alien-invasion-game/js/galagai-model.json?model-check={int(time.time())}"
-    try:
-        output = run(["curl", "-fsSL", "--max-time", "20", url], capture=True)
-        data = json.loads(output)
-    except (subprocess.CalledProcessError, json.JSONDecodeError) as error:
-        print(f"Public manifest check skipped/failed: {error}", flush=True)
-        return
-    public_summary = {
-        "version": data.get("version"),
-        "pilotVersions": len(data.get("versions", {}).get("pilot", [])),
-        "enemyVersions": len(data.get("versions", {}).get("enemies", [])),
-        "latestPilot": data.get("networkRef"),
-        "latestEnemy": data.get("enemies", {}).get("networkRef") if isinstance(data.get("enemies"), dict) else None,
-    }
-    print(json.dumps({"publicManifest": public_summary}, indent=2), flush=True)
     expected_public = {
         "version": expected["version"],
         "pilotVersions": expected["pilotVersions"],
@@ -262,8 +247,32 @@ def public_manifest_check(expected: dict[str, object]) -> None:
         "latestPilot": expected["latestPilot"],
         "latestEnemy": expected["latestEnemy"],
     }
-    if public_summary != expected_public:
-        raise RuntimeError("Public Pages manifest is not serving the expected model artifact yet.")
+    last_summary: dict[str, object] | None = None
+    for attempt in range(1, 7):
+        url = f"https://abhidya.github.io/alien-invasion-game/js/galagai-model.json?model-check={int(time.time())}-{attempt}"
+        try:
+            output = run(["curl", "-fsSL", "--max-time", "20", url], capture=True)
+            data = json.loads(output)
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as error:
+            print(f"Public manifest check attempt {attempt} skipped/failed: {error}", flush=True)
+            time.sleep(5)
+            continue
+        public_summary = {
+            "version": data.get("version"),
+            "pilotVersions": len(data.get("versions", {}).get("pilot", [])),
+            "enemyVersions": len(data.get("versions", {}).get("enemies", [])),
+            "latestPilot": data.get("networkRef"),
+            "latestEnemy": data.get("enemies", {}).get("networkRef") if isinstance(data.get("enemies"), dict) else None,
+        }
+        last_summary = public_summary
+        print(json.dumps({"publicManifest": public_summary, "attempt": attempt}, indent=2), flush=True)
+        if public_summary == expected_public:
+            return
+        time.sleep(5)
+    raise RuntimeError(
+        "Public Pages manifest is not serving the expected model artifact yet. "
+        f"Expected {expected_public}, saw {last_summary}."
+    )
 
 
 def parse_args() -> argparse.Namespace:
