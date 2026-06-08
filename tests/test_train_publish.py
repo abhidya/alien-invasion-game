@@ -41,11 +41,11 @@ class TrainPublishTest(unittest.TestCase):
         )
 
     def test_default_checkpoint_dir_uses_current_schema_line(self):
-        self.assertEqual(train_publish.DEFAULT_CHECKPOINT_DIR, Path(".training-checkpoints/galagai-balanced-v14"))
-        self.assertEqual(train_publish.EXPECTED_MODEL_SCHEMA_VERSION, 14)
+        self.assertEqual(train_publish.DEFAULT_CHECKPOINT_DIR, Path(".training-checkpoints/galagai-balanced-v15"))
+        self.assertEqual(train_publish.EXPECTED_MODEL_SCHEMA_VERSION, 15)
 
     def test_add_rounds_command_requires_new_rounds_after_resume(self):
-        args = self._args(Path(".training-checkpoints/galagai-balanced-v14"))
+        args = self._args(Path(".training-checkpoints/galagai-balanced-v15"))
 
         command = train_publish.build_train_command(args, target_rounds=300, required_new_balanced_rounds=43)
 
@@ -53,7 +53,7 @@ class TrainPublishTest(unittest.TestCase):
         self.assertEqual(command[required_index + 1], "43")
 
     def test_warmup_generation_flags_are_forwarded_to_trainer(self):
-        args = self._args(Path(".training-checkpoints/galagai-balanced-v14"))
+        args = self._args(Path(".training-checkpoints/galagai-balanced-v15"))
         args.pilot_warmup_generations = 3
         args.enemy_warmup_generations = 1
 
@@ -123,7 +123,7 @@ class TrainPublishTest(unittest.TestCase):
             args = self._args(checkpoint_dir)
             args.no_resume = False
 
-            with self.assertRaisesRegex(RuntimeError, "does not match current schema 14"):
+            with self.assertRaisesRegex(RuntimeError, "does not match current schema 15"):
                 train_publish.validate_resume_checkpoint(args)
 
             args.no_resume = True

@@ -7,6 +7,28 @@ from tools import train_static_pilot
 
 
 class StaticPilotArtifactTest(unittest.TestCase):
+    def test_relative_x_uses_toroidal_shortest_distance(self):
+        rel = train_static_pilot.HeadlessGalagai._relative_x
+        width = train_static_pilot.CANVAS_WIDTH
+        half = width / 2.0
+        # Aligned -> zero.
+        self.assertAlmostEqual(rel(0.0), 0.0)
+        # Small linear deltas are unchanged.
+        self.assertAlmostEqual(rel(10.0), 10.0 / half)
+        self.assertAlmostEqual(rel(-10.0), -10.0 / half)
+        # A delta just under the full width is physically a short hop across the
+        # seam: it must wrap to a small magnitude, not saturate near +/-1.
+        self.assertAlmostEqual(rel(width - 20.0), -20.0 / half)
+        self.assertAlmostEqual(rel(-(width - 20.0)), 20.0 / half)
+        # Result always stays within [-1, 1].
+        for value in (-2 * width, -width, -half, 0.0, half, width, 2 * width):
+            self.assertGreaterEqual(rel(value), -1.0)
+            self.assertLessEqual(rel(value), 1.0)
+
+    def test_exported_manifest_marks_wrap_feature_encoding(self):
+        self.assertEqual(train_static_pilot.FEATURE_ENCODING, "wrap-x")
+        self.assertEqual(train_static_pilot.MODEL_SCHEMA_VERSION, 15)
+
     def test_environment_penalizes_drop_spam(self):
         env = train_static_pilot.HeadlessGalagai(seed=12, max_steps=20)
         alien = env.aliens[0]
@@ -425,7 +447,7 @@ class StaticPilotArtifactTest(unittest.TestCase):
             pilot_payload = json.loads((path.parent / payload["networkRef"]).read_text(encoding="utf-8"))
             enemy_payload = json.loads((path.parent / payload["enemies"]["networkRef"]).read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["version"], 14)
+        self.assertEqual(payload["version"], 15)
         self.assertEqual(payload["algorithm"], "stable-baselines3-dqn")
         self.assertEqual(payload["actions"], train_static_pilot.PILOT_ACTIONS)
         self.assertEqual(payload["features"], train_static_pilot.FEATURES)

@@ -97,10 +97,16 @@ ENEMY_SHIP_CONTROL_STEP_X = 32.0
 ENEMY_SHIP_CONTROL_STEP_Y = FLEET_DROP * 0.70
 MAX_ENEMY_SHOTS_PER_STEP = 4
 INVALID_DROP_PENALTY = 0.90
-MODEL_SCHEMA_VERSION = 14
+MODEL_SCHEMA_VERSION = 15
+# Identifies how horizontal distances are encoded in the feature vector. "wrap-x"
+# means relative-x deltas use the shortest signed distance across the toroidal
+# (left<->right wrapping) screen instead of a naive linear difference. The browser
+# reads this marker to apply the matching transform; older models without it are
+# treated as the legacy linear encoding.
+FEATURE_ENCODING = "wrap-x"
 DQN_NET_ARCH = [64, 64]
 MODEL_FILE_DIR = "galagai-models"
-DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v14")
+DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v15")
 RETENTION_LATEST_DEFAULT = 12
 
 
@@ -925,7 +931,14 @@ class HeadlessGalagai:
 
     @staticmethod
     def _relative_x(value: float) -> float:
-        return max(-1.0, min(1.0, value / (CANVAS_WIDTH / 2.0)))
+        # Shortest signed horizontal delta on the wrap-around (toroidal) x-axis.
+        # The screen wraps left<->right, so two points near opposite edges are
+        # physically adjacent; a naive linear difference would report them as
+        # maximally far apart and hide the wrap as an escape route. Map the raw
+        # delta into (-W/2, W/2] (the shorter way around the ring) then normalize.
+        half = CANVAS_WIDTH / 2.0
+        wrapped = ((value + half) % CANVAS_WIDTH) - half
+        return max(-1.0, min(1.0, wrapped / half))
 
 
 class PilotTrainingEnv(gym.Env):
@@ -2032,6 +2045,7 @@ def checkpoint_entry(role: str, model: DQN, version_id: int, metrics: dict[str, 
         "model": model_name,
         "actions": actions,
         "features": FEATURES,
+        "featureEncoding": FEATURE_ENCODING,
         "network": export_network(model),
         **metric_fields,
     }
@@ -2204,6 +2218,7 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
         "algorithm": "stable-baselines3-dqn",
         "actions": PILOT_ACTIONS,
         "features": FEATURES,
+        "featureEncoding": FEATURE_ENCODING,
         "networkRef": pilot_manifest_versions[-1]["url"],
         "versions": {
             "pilot": pilot_manifest_versions,
@@ -2213,6 +2228,7 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
             "model": "sb3-dqn-enemies",
             "actions": ENEMY_ACTIONS,
             "features": FEATURES,
+            "featureEncoding": FEATURE_ENCODING,
             "networkRef": enemy_manifest_versions[-1]["url"],
             "constraints": {
                 "dropCooldownSeconds": DROP_COOLDOWN_SECONDS,
