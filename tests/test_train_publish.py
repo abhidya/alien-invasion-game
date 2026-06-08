@@ -28,6 +28,7 @@ class TrainPublishTest(unittest.TestCase):
             candidate_spawns=2,
             checkpoint_retention="tiered",
             keep_latest_versions=12,
+            replay_buffer_size=50_000,
             pilot_warmup_generations=0,
             enemy_warmup_generations=0,
             model=Path("js/galagai-model.json"),

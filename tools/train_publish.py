@@ -194,6 +194,8 @@ def build_train_command(
         args.checkpoint_retention,
         "--keep-latest-versions",
         str(args.keep_latest_versions),
+        "--replay-buffer-size",
+        str(args.replay_buffer_size),
         "--out",
         str(args.model),
     ]
@@ -546,6 +548,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-workers", type=int, default=4)
     parser.add_argument("--checkpoint-retention", choices=("all", "tiered"), default="tiered")
     parser.add_argument("--keep-latest-versions", type=int, default=12)
+    parser.add_argument(
+        "--replay-buffer-size",
+        type=int,
+        default=50_000,
+        help="Off-policy replay buffer capacity. Lower it (e.g. 10000) when the observation "
+        "is a large board grid to keep replay pickles from filling the disk.",
+    )
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--no-train", action="store_true", help="Only verify/commit/publish current model files.")

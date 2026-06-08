@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -1059,12 +1060,25 @@ def close_training_env(env: Any) -> None:
             pass
 
 
+def replay_buffer_size() -> int:
+    """Replay capacity, overridable via env var so spawned candidate workers inherit it.
+
+    A board-grid observation is far larger than the legacy feature vector, and the
+    off-policy replay buffer stores two observations per transition, so a 50k buffer
+    can balloon to gigabytes and exhaust the disk. Lowering this is the cheapest relief.
+    """
+    try:
+        return max(1_000, int(os.environ.get("GALAGAI_REPLAY_BUFFER_SIZE", "50000")))
+    except (TypeError, ValueError):
+        return 50_000
+
+
 def make_dqn(env: Any, seed: int, learning_rate: float) -> DQN:
     return DQN(
         "MlpPolicy",
         env,
         learning_rate=learning_rate,
-        buffer_size=50_000,
+        buffer_size=replay_buffer_size(),
         learning_starts=250,
         batch_size=64,
         gamma=0.97,
@@ -2324,7 +2338,16 @@ def main() -> None:
         help="Which exported checkpoint JSON files to keep. 'tiered' keeps latest N, every 2 through 100, every 10 through 1000, and every 100 after.",
     )
     parser.add_argument("--keep-latest-versions", type=int, default=RETENTION_LATEST_DEFAULT)
+    parser.add_argument(
+        "--replay-buffer-size",
+        type=int,
+        default=replay_buffer_size(),
+        help="Off-policy replay buffer capacity. Lower it for large board-grid observations "
+        "so replay pickles do not exhaust the disk.",
+    )
     args = parser.parse_args()
+    # Propagate via env so spawned candidate workers (ProcessPoolExecutor) inherit it.
+    os.environ["GALAGAI_REPLAY_BUFFER_SIZE"] = str(max(1_000, int(args.replay_buffer_size)))
     retention = CheckpointRetention(mode=args.checkpoint_retention, keep_latest=args.keep_latest_versions)
 
     pilot_model, enemy_model, self_play = train_self_play(
