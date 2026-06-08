@@ -16,6 +16,7 @@ from typing import Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXPECTED_MODEL_SCHEMA_VERSION = 14
 DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v14")
 DEFAULT_MODEL = Path("js/galagai-model.json")
 STATIC_PAGE_PATHS = [
@@ -43,6 +44,29 @@ def checkpoint_rounds(checkpoint_dir: Path) -> int:
     state = json.loads(state_path.read_text(encoding="utf-8"))
     rounds = state.get("rounds", [])
     return len(rounds) if isinstance(rounds, list) else int(state.get("roundNumber", 0))
+
+
+def checkpoint_schema_version(checkpoint_dir: Path) -> int | None:
+    state_path = checkpoint_dir / "state.json"
+    if not state_path.exists():
+        return None
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    schema = state.get("schemaVersion")
+    return int(schema) if schema is not None else None
+
+
+def validate_resume_checkpoint(args: argparse.Namespace) -> None:
+    if args.no_resume:
+        return
+    schema = checkpoint_schema_version(args.checkpoint_dir)
+    if schema is None:
+        return
+    if schema != EXPECTED_MODEL_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Checkpoint schema {schema} at {args.checkpoint_dir} does not match current schema "
+            f"{EXPECTED_MODEL_SCHEMA_VERSION}. Use {DEFAULT_CHECKPOINT_DIR} for the current run, "
+            "or choose a fresh checkpoint directory with --no-resume."
+        )
 
 
 def checkpoint_generation_counts(checkpoint_dir: Path) -> dict[str, int]:
@@ -312,7 +336,7 @@ def run_training_with_publish_interval(
         )
         print("+", " ".join(command), flush=True)
         process: subprocess.Popen[object] = subprocess.Popen(command, cwd=ROOT, start_new_session=True)
-        started_at = time.monotonic()
+        started_at = time.time()
         publish_due_logged = False
         try:
             while True:
@@ -332,7 +356,7 @@ def run_training_with_publish_interval(
                         raise subprocess.CalledProcessError(returncode, command)
                     return True
 
-                elapsed = time.monotonic() - started_at
+                elapsed = time.time() - started_at
                 if elapsed >= interval_seconds and recovered_rounds > current_rounds:
                     if not checkpoint_is_publishable(args.checkpoint_dir):
                         if not publish_due_logged:
@@ -591,6 +615,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    validate_resume_checkpoint(args)
     current_rounds = checkpoint_rounds(args.checkpoint_dir)
     target_rounds = args.target_rounds if args.target_rounds is not None else current_rounds + args.add_rounds
     if target_rounds < current_rounds:

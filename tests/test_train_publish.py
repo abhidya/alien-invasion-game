@@ -45,6 +45,7 @@ class TrainPublishTest(unittest.TestCase):
 
     def test_default_checkpoint_dir_uses_current_schema_line(self):
         self.assertEqual(train_publish.DEFAULT_CHECKPOINT_DIR, Path(".training-checkpoints/galagai-balanced-v14"))
+        self.assertEqual(train_publish.EXPECTED_MODEL_SCHEMA_VERSION, 14)
 
     def test_add_rounds_command_requires_new_rounds_after_resume(self):
         args = self._args(Path(".training-checkpoints/galagai-balanced-v14"))
@@ -113,6 +114,23 @@ class TrainPublishTest(unittest.TestCase):
             with mock.patch.object(train_publish, "run", side_effect=fake_run):
                 with self.assertRaisesRegex(RuntimeError, "nothing publishable"):
                     train_publish.run_training(args, target_rounds=5, current_rounds=0)
+
+    def test_resume_rejects_stale_schema_checkpoint_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = Path(tmpdir) / "galagai-balanced-v12"
+            checkpoint_dir.mkdir()
+            (checkpoint_dir / "state.json").write_text(
+                json.dumps({"schemaVersion": 12, "rounds": [{}, {}], "roundNumber": 2}),
+                encoding="utf-8",
+            )
+            args = self._args(checkpoint_dir)
+            args.no_resume = False
+
+            with self.assertRaisesRegex(RuntimeError, "does not match current schema 14"):
+                train_publish.validate_resume_checkpoint(args)
+
+            args.no_resume = True
+            train_publish.validate_resume_checkpoint(args)
 
     def test_public_manifest_check_retries_until_pages_updates(self):
         expected = {

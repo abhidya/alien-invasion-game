@@ -58,7 +58,10 @@ python tools/train_publish.py --add-rounds 24
 exports static JSON, prunes retained model files, runs verification, commits and
 pushes `master`, mirrors the same static files to `gh-pages`, and checks the
 public Pages manifest. Use `--target-rounds <n>` instead of `--add-rounds` when
-you want an absolute round target. If you press Ctrl-C after at least one new
+you want an absolute round target. The publisher refuses to resume stale schema
+directories such as `.training-checkpoints/galagai-balanced-v12`; use the default
+v14 directory for current training, or pair a fresh directory with `--no-resume`.
+If you press Ctrl-C after at least one new
 publishable generation checkpoint is complete, the wrapper exports and publishes
 the latest completed checkpoint instead of throwing away the run. A checkpoint is
 publishable once both a pilot and enemy model exist. Use
