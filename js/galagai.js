@@ -429,7 +429,7 @@
   }
 
   function runModelPilot() {
-    var action = predictModelAction(pilotModel, "stay");
+    var action = predictModelAction(pilotModel, "stay", pilotFeatures(modelUsesWrap(pilotModel)));
     keys.ArrowLeft = action === "left";
     keys.ArrowRight = action === "right";
     keys.ArrowUp = action === "up";
@@ -488,8 +488,9 @@
     if (!liveAliens.length) return;
 
     var summary = { left: 0, right: 0, down: 0, fire: 0, invalid: 0 };
+    var wrap = modelUsesWrap(enemyModel);
     liveAliens.forEach(function (alien) {
-      var action = predictModelAction(enemyModel, "hold", enemyFeatures(alien));
+      var action = predictModelAction(enemyModel, "hold", enemyFeatures(alien, wrap));
       applyEnemyShipAction(action, alien, summary);
     });
     enemyAction = enemyActionSummary(summary);
@@ -594,7 +595,26 @@
       })[0] || null;
   }
 
-  function pilotFeatures() {
+  function modelUsesWrap(model) {
+    // Models exported with the toroidal (wrap-around) feature encoding carry a
+    // "featureEncoding" marker (schema >= 15). Older linear-encoded models do not.
+    return Boolean(model && (model.featureEncoding === "wrap-x" ||
+      (typeof model.version === "number" && model.version >= 15)));
+  }
+
+  function relativeX(delta, wrap) {
+    // Normalized horizontal delta. When wrap is set, take the shortest signed
+    // distance across the toroidal x-axis (matches the Python trainer's
+    // _relative_x) so the policy can perceive a screen edge as an escape route.
+    var width = canvas.width;
+    var half = width / 2;
+    if (wrap) {
+      delta = (((delta + half) % width) + width) % width - half;
+    }
+    return clamp(delta / half, -1, 1);
+  }
+
+  function pilotFeatures(wrap) {
     var shipCenter = state.ship.x + state.ship.width / 2;
     var liveAliens = state.aliens.filter(function (alien) { return alien.alive; });
     var target = nearestThreat();
@@ -602,7 +622,7 @@
     var targetDy = 0;
     var alienCount = 0;
     if (target) {
-      targetDx = clamp(((target.x + target.width / 2) - shipCenter) / (canvas.width / 2), -1, 1);
+      targetDx = relativeX((target.x + target.width / 2) - shipCenter, wrap);
       targetDy = clamp(
         ((target.y + target.height / 2) - (state.ship.y + state.ship.height / 2)) / canvas.height,
         -1,
@@ -617,22 +637,21 @@
     var dangerShot = dangerousEnemyShot(shipCenter);
     var pilotBulletThreat = dangerousPilotBullet(liveAliens);
     var threatDx = closestShot
-      ? clamp(((closestShot.x + closestShot.width / 2) - shipCenter) / (canvas.width / 2), -1, 1)
+      ? relativeX((closestShot.x + closestShot.width / 2) - shipCenter, wrap)
       : 1;
     var threatY = closestShot ? clamp(closestShot.y / canvas.height, 0, 1) : 0;
     var dangerDx = dangerShot
-      ? clamp(((dangerShot.x + dangerShot.width / 2) - shipCenter) / (canvas.width / 2), -1, 1)
+      ? relativeX((dangerShot.x + dangerShot.width / 2) - shipCenter, wrap)
       : 1;
     var dangerY = dangerShot ? clamp(dangerShot.y / canvas.height, 0, 1) : 0;
     var dangerLane = dangerShot ? shotLaneOverlap(dangerShot, state.ship) : 0;
     var pilotBulletDx = 0;
     var pilotBulletY = 0;
     if (pilotBulletThreat) {
-      pilotBulletDx = clamp(
-        ((pilotBulletThreat.bullet.x + pilotBulletThreat.bullet.width / 2) -
-          (pilotBulletThreat.alien.x + pilotBulletThreat.alien.width / 2)) / (canvas.width / 2),
-        -1,
-        1
+      pilotBulletDx = relativeX(
+        (pilotBulletThreat.bullet.x + pilotBulletThreat.bullet.width / 2) -
+          (pilotBulletThreat.alien.x + pilotBulletThreat.alien.width / 2),
+        wrap
       );
       pilotBulletY = clamp(
         (pilotBulletThreat.bullet.y - (pilotBulletThreat.alien.y + pilotBulletThreat.alien.height)) / canvas.height,
@@ -669,10 +688,10 @@
     ];
   }
 
-  function enemyFeatures(alien) {
-    var features = pilotFeatures();
+  function enemyFeatures(alien, wrap) {
+    var features = pilotFeatures(wrap);
     var shipCenter = state.ship.x + state.ship.width / 2;
-    features.push(clamp(((alien.x + alien.width / 2) - shipCenter) / (canvas.width / 2), -1, 1));
+    features.push(relativeX((alien.x + alien.width / 2) - shipCenter, wrap));
     features.push(clamp(alien.y / canvas.height, 0, 1));
     features.push(enemyRoleValue(alien.role));
     features.push(canAlienFire(alien) ? 1 : 0);
