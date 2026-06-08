@@ -67,9 +67,6 @@ the latest completed checkpoint instead of throwing away the run. A checkpoint i
 publishable once both a pilot and enemy model exist. Use
 `--publish-interval-seconds 600` for a long run that commits, pushes, mirrors to
 Pages, and resumes about every ten minutes after a completed checkpoint boundary.
-The final public Pages manifest check retries for several minutes by default;
-tune it with `--public-check-attempts` and `--public-check-delay` if GitHub Pages
-is slow.
 
 For a fresh schema/bootstrap run, publish the first three pilot generations plus
 one enemy bootstrap model so the browser manifest can load both sides:
