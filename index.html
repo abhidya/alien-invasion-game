@@ -76,6 +76,21 @@
       </p>
     </section>
 
+    <section class="brain-shell" id="brains" aria-labelledby="brain-title">
+      <div class="brain-intro">
+        <p class="eyebrow">Model switcher</p>
+        <h2 id="brain-title">Choose the pilot &amp; enemy brains</h2>
+        <p>
+          Swap the AI technique driving each side. The explainer below shows the
+          chosen technique's design, implementation, pros, cons, and caveats. A
+          <strong>live</strong> technique has exported weights and plays immediately;
+          others are inspectable and unlock once trained and exported.
+        </p>
+      </div>
+      <div id="brain-selectors"></div>
+      <div id="brain-explainer"></div>
+    </section>
+
     <section class="arch-shell" id="architectures" aria-labelledby="arch-title">
       <div class="arch-intro">
         <p class="eyebrow">AI design lab</p>
@@ -117,7 +132,10 @@
   </main>
 
   <div id="architecture-detail" hidden></div>
+  <script src="js/game-spec.js"></script>
+  <script src="js/encoder.js"></script>
   <script src="js/galagai.js"></script>
   <script src="js/architectures.js"></script>
+  <script src="js/model-lab.js"></script>
 </body>
 </html>

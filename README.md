@@ -54,7 +54,7 @@ python tools/train_publish.py --add-rounds 24
 ```
 
 `tools/train_publish.py` is the normal self-serve workflow. It resumes from
-`.training-checkpoints/galagai-balanced-v15`, trains the next balanced rounds,
+`.training-checkpoints/galagai-balanced-v16`, trains the next balanced rounds,
 exports static JSON, prunes retained model files, runs verification, commits and
 pushes `master`, mirrors the same static files to `gh-pages`, and checks the
 public Pages manifest. Use `--target-rounds <n>` instead of `--add-rounds` when
@@ -183,6 +183,36 @@ git clone https://github.com/username/alien-invasion-game.git
 To run the game, ensure that you have python3 and pygame library installed in 
 your system.
 
+## Architecture: one source of truth for rules, observations, and rewards
+
+The browser runtime (`js/galagai.js`) and the headless trainer
+(`tools/train_static_pilot.py`) are two adapters of one game. An agent is trained
+against the trainer and deployed into the browser, so the two must agree exactly.
+Four seams keep them honest:
+
+- **Game rules — `game_spec.json`.** Physics constants (speeds, fleet shape,
+  cooldowns, drops) live once. The browser reads them via `js/game-spec.js`; Python
+  via `tools/game_spec.py`. `tests/test_game_spec_contract.py` pins all three copies
+  together. (Setting this up surfaced a real drift: enemy-shot speed was 210 in the
+  browser vs 230 in the trainer — now unified.)
+- **Observation encoder — `js/encoder.js`.** The 8×28×48 grid + 6 scalar
+  observation is produced by one DOM-free module the browser and a Node test both
+  run. `tools/gen_encoder_golden.py` generates golden vectors from the Python
+  encoder; `tests/test_encoder_contract.py` (Python) and
+  `tests/test_encoder_js_parity.py` (JS via Node) pin both encoders to them.
+- **Reward shaping — `RewardProfile`.** Reward weights are data, not magic numbers
+  welded into the step loop. `compute_pilot_reward` / `compute_enemy_reward` are
+  pure functions over `(events, done, context, profile)`, unit-tested in
+  `tests/test_reward_profile.py`. Defaults reproduce the original constants.
+- **Model switcher — `js/model-lab.js`.** Pick the AI technique driving the pilot
+  and the enemies; an inline explainer shows each technique's design,
+  implementation, pros, cons, and caveats (sourced from `js/architectures.js`). The
+  manifest records the live `technique` per side, so the UI marks what is actually
+  running from data.
+
+`alien_invasion/` is a deprecated third implementation of the game — see
+`alien_invasion/DEPRECATED.md`.
+
 ## Python/Pygame Local Play
 
 ```bash
@@ -224,7 +254,7 @@ file is a legacy TensorFlow artifact preserved only for inspection.
 The CLI uses tqdm progress by default and prints ETA, side/generation counts,
 win-rate postfix metrics, drop/invalid-drop rates, and final artifact size
 summary. It checkpoints after every completed generation to
-`.training-checkpoints/galagai-balanced-v15` by default, including the SB3 model, replay
+`.training-checkpoints/galagai-balanced-v16` by default, including the SB3 model, replay
 buffer, exported generation JSON, and resumable `state.json`. Pass
 `--resume` to continue from that checkpoint directory, `--checkpoint-dir <path>`
 to change the location, `--no-checkpoints` for a throwaway run,

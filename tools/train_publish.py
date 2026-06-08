@@ -16,8 +16,8 @@ from typing import Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_MODEL_SCHEMA_VERSION = 15
-DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v15")
+EXPECTED_MODEL_SCHEMA_VERSION = 16
+DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v16")
 DEFAULT_MODEL = Path("js/galagai-model.json")
 STATIC_PAGE_PATHS = [
     Path("index.html"),

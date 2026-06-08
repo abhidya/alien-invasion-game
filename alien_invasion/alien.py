@@ -60,28 +60,26 @@ class Alien(Sprite):
         # return [0, 1]
 
     def update(self, stats: GameStats, game_items: GameItems, move=None, move_count=None, ):
-        """Move the alien."""
-        if move == None:
+        """Move the alien ``move_count`` sub-steps in the chosen direction.
+
+        Previously this recursed on itself (and accidentally passed the GameStats
+        *class* instead of the ``stats`` instance), so a large move_count could blow
+        the Python recursion limit. It is now an equivalent bounded loop: the per-
+        step displacement and drop-distance check are unchanged, just iterated.
+        """
+        if move is None:
             move = self.getmove(game_items, x=self.x, y=self.y, )  # items=game_items)
 
-        tp = 0
-        if hasattr(stats, 'time_passed'):
-            tp = stats.time_passed
-        else:
-            tp = .02
-        if move_count == None:
+        tp = stats.time_passed if hasattr(stats, 'time_passed') else .02
+        if move_count is None:
             move_count = 2
-        if move_count != 0:
-            # self.x += self.ai_settings.alien_speed_factor_x * self.ai_settings.alien_direction_x * stats.time_passed
+        for _ in range(max(0, move_count)):
             self.x += self.ai_settings.alien_speed_factor_x * move[0] * tp
             self.rect.x = self.x
             if self.y > self.drop_dist:
                 self.drop_dist += self.ai_settings.alien_drop_dist
-            # self.y += self.ai_settings.alien_speed_factor_y * self.ai_settings.alien_direction_y * stats.time_passed
             self.y += self.ai_settings.alien_speed_factor_y * move[1] * tp
-            # self.y += .1 * move[1] * tp
             self.rect.y = self.y
-            self.update(GameStats, game_items, move=move, move_count=move_count - 1)
 
     def check_edges(self, edge='both'):
         """Returns True if alien is at edge of screen."""

@@ -44,71 +44,103 @@ ENEMY_ACTIONS = [
     "down_fire",
     "fire",
 ]
-FEATURES = [
-    "target_dx",
-    "abs_target_dx",
-    "threat_dx",
-    "threat_y",
-    "bullet_ready",
-    "alien_count",
-    "wave",
-    "drop_ready",
-    "enemy_shot_ready",
-    "fleet_y",
-    "lives",
-    "danger_shot_dx",
-    "danger_shot_y",
-    "danger_shot_lane",
-    "pilot_bullet_dx",
-    "pilot_bullet_y",
-    "bee_count",
-    "gunship_count",
-    "boss_count",
-    "ship_y",
-    "target_dy",
-    "enemy_ship_dx",
-    "enemy_ship_y",
-    "enemy_ship_role",
-    "enemy_ship_fire_ready",
-    "enemy_ship_bullet_lane",
-    "enemy_ship_bottom",
+GRID_CHANNELS = [
+    "ship",
+    "pilot_bullet",
+    "enemy_shot",
+    "bee",
+    "butterfly",
+    "boss",
+    "controlled_enemy",
+    "danger_lane",
 ]
 
-CANVAS_WIDTH = 960.0
-CANVAS_HEIGHT = 560.0
-SHIP_WIDTH = 64.0
-SHIP_HEIGHT = 48.0
-SHIP_Y = CANVAS_HEIGHT - 72.0
-SHIP_SPEED = 470.0
-SHIP_VERTICAL_SPEED = 330.0
-SHIP_MIN_Y = CANVAS_HEIGHT - 170.0
-SHIP_MAX_Y = CANVAS_HEIGHT - 56.0
-BULLET_SPEED = 620.0
-ENEMY_SHOT_SPEED = 230.0
-ALIEN_WIDTH = 48.0
-ALIEN_HEIGHT = 34.0
-FLEET_DROP = 18.0
-MAX_ALIENS_NORMALIZER = 45.0
-ACTION_DT = 0.12
-DROP_COOLDOWN_SECONDS = 1.08
-ENEMY_SHOT_COOLDOWN_SECONDS = 0.0
-ENEMY_SHIP_DOWN_COOLDOWN_SECONDS = 0.45
-ENEMY_SHIP_SHOT_COOLDOWN_SECONDS = 0.65
-ENEMY_SHIP_CONTROL_STEP_X = 32.0
-ENEMY_SHIP_CONTROL_STEP_Y = FLEET_DROP * 0.70
-MAX_ENEMY_SHOTS_PER_STEP = 4
+GRID_ROWS = 28
+GRID_COLS = 48
+FRAME_SHAPE = (len(GRID_CHANNELS), GRID_ROWS, GRID_COLS)
+
+SCALAR_FEATURES = [
+    "fire_ready",
+    "wave",
+    "lives",
+    "ship_y",
+    "controlled_enemy_fire_ready",
+    "controlled_enemy_role",
+]
+
+FEATURES = [
+    *[
+        f"grid_{channel}_{row}_{col}"
+        for channel in GRID_CHANNELS
+        for row in range(GRID_ROWS)
+        for col in range(GRID_COLS)
+    ],
+    *SCALAR_FEATURES,
+]
+
+# Physics constants come from the canonical game_spec.json (recommendation A:
+# single source of truth shared with the browser runtime). See tools/game_spec.py.
+from tools.game_spec import (  # noqa: E402
+    ACTION_DT,
+    ALIEN_HEIGHT,
+    ALIEN_WIDTH,
+    BULLET_SPEED,
+    CANVAS_HEIGHT,
+    CANVAS_WIDTH,
+    DROP_COOLDOWN_SECONDS,
+    ENEMY_SHIP_CONTROL_STEP_X,
+    ENEMY_SHIP_CONTROL_STEP_Y,
+    ENEMY_SHIP_DOWN_COOLDOWN_SECONDS,
+    ENEMY_SHIP_SHOT_COOLDOWN_SECONDS,
+    ENEMY_SHOT_COOLDOWN_SECONDS,
+    ENEMY_SHOT_SPEED,
+    ENEMY_SHOT_SPEED_PER_WAVE,
+    FLEET_BASE_SPEED,
+    FLEET_DROP,
+    FLEET_GAP_X,
+    FLEET_GAP_Y,
+    FLEET_SPEED_PER_WAVE,
+    FLEET_START_X_OFFSET,
+    FLEET_TOP_Y,
+    MAX_ALIENS_NORMALIZER,
+    MAX_ENEMY_SHOTS_PER_STEP,
+    SHIP_HEIGHT,
+    SHIP_MAX_Y,
+    SHIP_MIN_Y,
+    SHIP_SPEED,
+    SHIP_VERTICAL_SPEED,
+    SHIP_WIDTH,
+    SHIP_Y,
+    fleet_columns,
+    fleet_rows,
+)
+
 INVALID_DROP_PENALTY = 0.90
-MODEL_SCHEMA_VERSION = 15
-# Identifies how horizontal distances are encoded in the feature vector. "wrap-x"
-# means relative-x deltas use the shortest signed distance across the toroidal
-# (left<->right wrapping) screen instead of a naive linear difference. The browser
-# reads this marker to apply the matching transform; older models without it are
-# treated as the legacy linear encoding.
-FEATURE_ENCODING = "wrap-x"
+MODEL_SCHEMA_VERSION = 16
+FEATURE_ENCODING = "grid-v1"
 DQN_NET_ARCH = [64, 64]
 MODEL_FILE_DIR = "galagai-models"
-DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v15")
+DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v16")
 RETENTION_LATEST_DEFAULT = 12
+
+# The RL algorithm this trainer currently exports. The browser brain-selector
+# (js/architectures.js / js/model-lab.js) keys its explainers off a "technique"
+# id; the manifest carries that id per side so the frontend marks the *live*
+# technique from data instead of hardcoding "dqn". A future unified exporter that
+# trains other families fills in the same field from this registry.
+RL_ALGORITHM = "stable-baselines3-dqn"
+ALGORITHM_TECHNIQUE = {
+    "stable-baselines3-dqn": "dqn",
+    "stable-baselines3-qrdqn": "qr-dqn",
+    "stable-baselines3-ppo": "ppo",
+    "sb3-contrib-maskable-ppo": "maskable-ppo",
+    "neuroevolution-es": "neuro-es",
+}
+
+
+def technique_for_algorithm(algorithm: str = RL_ALGORITHM) -> str:
+    """Map an RL algorithm string to a frontend brain-selector technique id."""
+    return ALGORITHM_TECHNIQUE.get(algorithm, "dqn")
 
 
 @dataclass(frozen=True)
@@ -187,6 +219,114 @@ class StepEvents:
 
 
 @dataclass(frozen=True)
+class RewardProfile:
+    """Reward-shaping weights as data (recommendation C).
+
+    The shaping constants used to be magic numbers welded into the step loop, so
+    A/B-ing a weight meant editing code and retraining. Pulling them into a frozen
+    profile makes the reward a deep module: a small interface ``compute_*_reward``
+    parameterized by data, swappable per training run, and unit-testable in
+    isolation against a tiny StepEvents fixture. Defaults reproduce the original
+    constants exactly, so existing checkpoints stay comparable.
+    """
+
+    # Pilot shaping.
+    pilot_score_divisor: float = 35.0
+    pilot_wave_clear_base: float = 8.0
+    pilot_wave_clear_speed: float = 6.0
+    pilot_hit: float = 1.15
+    pilot_life_loss: float = 7.0
+    pilot_aligned_action: float = 0.08
+    pilot_aligned_fire: float = 0.42
+    pilot_misaligned_fire: float = 0.22
+    pilot_bad_fire: float = 0.48
+    pilot_missed: float = 0.32
+    pilot_step_cost: float = 0.008
+    pilot_win_base: float = 6.0
+    pilot_win_speed: float = 3.0
+    pilot_loss: float = 6.0
+    pilot_timeout: float = 1.0
+    # Enemy shaping.
+    enemy_life_loss: float = 7.0
+    enemy_alien_destroyed: float = 1.45
+    enemy_score_divisor: float = 55.0
+    enemy_wave_clear_base: float = 2.0
+    enemy_wave_clear_speed: float = 2.0
+    enemy_survival: float = 0.02
+    enemy_tactical: float = 0.12
+    enemy_valid_drop_tactical: float = 0.04
+    enemy_valid_drop_idle: float = 0.10
+    enemy_invalid_drop: float = INVALID_DROP_PENALTY
+    enemy_invalid_fire: float = 0.25
+    enemy_fired: float = 0.05
+    enemy_win: float = 6.0
+    enemy_loss: float = 5.0
+    enemy_timeout: float = 0.5
+
+
+DEFAULT_REWARD_PROFILE = RewardProfile()
+
+
+@dataclass(frozen=True)
+class RewardContext:
+    """Per-step scalars the reward needs from the env, passed in explicitly so the
+    reward functions stay pure (no reach back into the env)."""
+
+    clear_speed: float
+    winner: str
+    live_alien_fraction: float
+
+
+def compute_pilot_reward(
+    events: StepEvents, done: bool, ctx: RewardContext, profile: RewardProfile
+) -> float:
+    reward = events.score_gain / profile.pilot_score_divisor
+    if events.wave_cleared:
+        reward += profile.pilot_wave_clear_base + profile.pilot_wave_clear_speed * ctx.clear_speed
+    reward += profile.pilot_hit * max(0, events.pilot_hits)
+    reward -= profile.pilot_life_loss * max(0, events.life_loss)
+    reward += profile.pilot_aligned_action if events.pilot_aligned_action else 0.0
+    if events.pilot_fired:
+        reward += profile.pilot_aligned_fire if events.pilot_aligned_fire else -profile.pilot_misaligned_fire
+    reward -= profile.pilot_bad_fire if events.pilot_bad_fire else 0.0
+    reward -= profile.pilot_missed if events.pilot_missed else 0.0
+    reward -= profile.pilot_step_cost
+    if done:
+        if ctx.winner == "pilot":
+            reward += profile.pilot_win_base + profile.pilot_win_speed * ctx.clear_speed
+        elif ctx.winner == "enemies":
+            reward -= profile.pilot_loss
+        else:
+            reward -= profile.pilot_timeout
+    return float(reward)
+
+
+def compute_enemy_reward(
+    events: StepEvents, done: bool, ctx: RewardContext, profile: RewardProfile
+) -> float:
+    reward = profile.enemy_life_loss * max(0, events.life_loss)
+    reward -= profile.enemy_alien_destroyed * max(0, events.aliens_destroyed)
+    reward -= events.score_gain / profile.enemy_score_divisor
+    if events.wave_cleared:
+        reward -= profile.enemy_wave_clear_base + profile.enemy_wave_clear_speed * ctx.clear_speed
+    reward += profile.enemy_survival * ctx.live_alien_fraction
+    reward += profile.enemy_tactical if events.enemy_tactical_action else 0.0
+    if events.valid_drop:
+        reward += profile.enemy_valid_drop_tactical if events.enemy_tactical_action else -profile.enemy_valid_drop_idle
+    reward -= profile.enemy_invalid_drop if events.invalid_drop else 0.0
+    reward -= profile.enemy_invalid_fire if events.invalid_fire else 0.0
+    reward += profile.enemy_fired if events.enemy_fired else 0.0
+    if done:
+        if ctx.winner == "enemies":
+            reward += profile.enemy_win
+        elif ctx.winner == "pilot":
+            reward -= profile.enemy_loss
+        else:
+            reward += profile.enemy_timeout
+    return float(reward)
+
+
+@dataclass(frozen=True)
 class EpisodeResult:
     winner: str
     score: int
@@ -228,68 +368,102 @@ class Policy(Protocol):
     def act(self, observation: np.ndarray) -> int:
         ...
 
-
 class HeuristicPilotPolicy:
     def act(self, observation: np.ndarray) -> int:
-        target_dx = float(observation[0])
-        threat_dx = float(observation[2])
-        threat_y = float(observation[3])
-        bullet_ready = observation[4] > 0.5
-        danger_dx = float(observation[11]) if len(observation) > 13 else threat_dx
-        danger_y = float(observation[12]) if len(observation) > 13 else threat_y
-        danger_lane = float(observation[13]) if len(observation) > 13 else 0.0
-        target_dy = float(observation[20]) if len(observation) > 20 else 0.0
-        if danger_y > 0.44 and danger_lane > 0.20:
-            return 0 if danger_dx >= 0 else 1
-        if threat_y > 0.74 and abs(threat_dx) < 0.18:
-            return 0 if threat_dx >= 0 else 1
-        if bullet_ready and abs(target_dx) < 0.10:
-            return 2
-        if abs(target_dx) < 0.16 and target_dy < -0.24:
-            return 4
-        if abs(target_dx) < 0.16 and target_dy > 0.18:
-            return 5
-        if target_dx < -0.08:
-            return 0
-        if target_dx > 0.08:
-            return 1
-        return 3
+        frame_size = int(np.prod(FRAME_SHAPE))
+        scalars = observation[frame_size:]
+        frame = observation[:frame_size].reshape(FRAME_SHAPE)
 
+        ship_cells = np.argwhere(frame[0] > 0.0)
+        if ship_cells.size == 0:
+            return 3
+
+        ship_y, ship_x = ship_cells.mean(axis=0)
+
+        enemy_frame = frame[3] + frame[4] + frame[5]
+        enemy_cells = np.argwhere(enemy_frame > 0.0)
+        shot_cells = np.argwhere(frame[2] > 0.0)
+
+        if shot_cells.size:
+            closest_shot = min(shot_cells, key=lambda cell: abs(float(cell[1]) - ship_x))
+            shot_y, shot_x = float(closest_shot[0]), float(closest_shot[1])
+            if shot_y > GRID_ROWS * 0.48 and abs(shot_x - ship_x) < 2.2:
+                return 0 if shot_x >= ship_x else 1
+
+        if enemy_cells.size == 0:
+            return 3
+
+        target = min(enemy_cells, key=lambda cell: abs(float(cell[1]) - ship_x))
+        target_y, target_x = float(target[0]), float(target[1])
+        fire_ready = bool(len(scalars) > 0 and scalars[0] > 0.5)
+
+        if fire_ready and abs(target_x - ship_x) < 1.8:
+            return 2
+        if target_x < ship_x - 1.2:
+            return 0
+        if target_x > ship_x + 1.2:
+            return 1
+        if target_y < ship_y - 6:
+            return 4
+        if target_y > ship_y + 2:
+            return 5
+        return 3
 
 class HeuristicEnemyPolicy:
     def act(self, observation: np.ndarray) -> int:
-        target_dx = float(observation[0])
-        drop_ready = observation[7] > 0.5
-        enemy_dx = float(observation[21]) if len(observation) > 21 else target_dx
-        enemy_y = float(observation[22]) if len(observation) > 22 else float(observation[9])
-        fire_ready = observation[24] > 0.5 if len(observation) > 24 else False
-        bullet_lane = float(observation[25]) if len(observation) > 25 else 0.0
-        if bullet_lane > 0.45:
-            return 1 if enemy_dx >= target_dx else 2
-        if fire_ready and abs(enemy_dx) < 0.18:
-            return 7
-        if fire_ready and abs(enemy_dx) < 0.34:
-            return 4 if target_dx < 0 else 5
-        if drop_ready and enemy_y < 0.58 and abs(enemy_dx) > 0.22:
-            return 3
-        return 1 if target_dx < 0 else 2
+        frame_size = int(np.prod(FRAME_SHAPE))
+        scalars = observation[frame_size:]
+        frame = observation[:frame_size].reshape(FRAME_SHAPE)
 
+        ship_cells = np.argwhere(frame[0] > 0.0)
+        controlled_cells = np.argwhere(frame[6] > 0.0)
+        pilot_bullet_cells = np.argwhere(frame[1] > 0.0)
+
+        if ship_cells.size == 0 or controlled_cells.size == 0:
+            return 0
+
+        ship_y, ship_x = ship_cells.mean(axis=0)
+        enemy_y, enemy_x = controlled_cells.mean(axis=0)
+
+        fire_ready = bool(len(scalars) > 4 and scalars[4] > 0.5)
+
+        if pilot_bullet_cells.size:
+            closest_bullet = min(pilot_bullet_cells, key=lambda cell: abs(float(cell[1]) - enemy_x))
+            bullet_y, bullet_x = float(closest_bullet[0]), float(closest_bullet[1])
+            if bullet_y > enemy_y and abs(bullet_x - enemy_x) < 2.0:
+                return 1 if enemy_x >= ship_x else 2
+
+        if fire_ready and abs(enemy_x - ship_x) < 2.0:
+            return 7
+        if fire_ready and abs(enemy_x - ship_x) < 4.0:
+            return 4 if ship_x < enemy_x else 5
+        if enemy_y < GRID_ROWS * 0.58 and abs(enemy_x - ship_x) > 3.0:
+            return 3
+        return 1 if ship_x < enemy_x else 2
 
 class OpeningEnemyPolicy:
     def act(self, observation: np.ndarray) -> int:
-        target_dx = float(observation[0])
-        drop_ready = observation[7] > 0.5
-        enemy_dx = float(observation[21]) if len(observation) > 21 else target_dx
-        enemy_y = float(observation[22]) if len(observation) > 22 else float(observation[9])
-        fire_ready = observation[24] > 0.5 if len(observation) > 24 else False
-        if fire_ready and abs(enemy_dx) < 0.24:
+        frame_size = int(np.prod(FRAME_SHAPE))
+        scalars = observation[frame_size:]
+        frame = observation[:frame_size].reshape(FRAME_SHAPE)
+
+        ship_cells = np.argwhere(frame[0] > 0.0)
+        controlled_cells = np.argwhere(frame[6] > 0.0)
+
+        if ship_cells.size == 0 or controlled_cells.size == 0:
+            return 0
+
+        _, ship_x = ship_cells.mean(axis=0)
+        enemy_y, enemy_x = controlled_cells.mean(axis=0)
+        fire_ready = bool(len(scalars) > 4 and scalars[4] > 0.5)
+
+        if fire_ready and abs(enemy_x - ship_x) < 2.5:
             return 7
         if fire_ready:
-            return 4 if target_dx < 0 else 5
-        if drop_ready and enemy_y < 0.48 and abs(enemy_dx) > 0.30:
+            return 4 if ship_x < enemy_x else 5
+        if enemy_y < GRID_ROWS * 0.48 and abs(enemy_x - ship_x) > 3.0:
             return 3
-        return 1 if target_dx < 0 else 2
-
+        return 1 if ship_x < enemy_x else 2
 
 class SB3Policy:
     def __init__(self, model: DQN | None):
@@ -351,10 +525,17 @@ def policy_from_spec(spec: PolicySpec) -> Policy:
 class HeadlessGalagai:
     """Browser-like GalagAI transition loop for RL training."""
 
-    def __init__(self, seed: int = 0, max_steps: int = 520, max_start_wave: int = 1):
+    def __init__(
+        self,
+        seed: int = 0,
+        max_steps: int = 520,
+        max_start_wave: int = 1,
+        reward_profile: RewardProfile | None = None,
+    ):
         self.rng = np.random.default_rng(seed)
         self.max_steps = max_steps
         self.max_start_wave = max(1, int(max_start_wave))
+        self.reward_profile = reward_profile or DEFAULT_REWARD_PROFILE
         self.reset(seed=seed)
 
     def reset(self, seed: int | None = None) -> np.ndarray:
@@ -377,7 +558,7 @@ class HeadlessGalagai:
         self.enemy_drop_cooldown = 0.0
         self.invulnerability = 0.0
         self.fleet_direction = 1
-        self.fleet_speed = 38.0
+        self.fleet_speed = FLEET_BASE_SPEED
         self.enemy_control_cursor = 0
         self.aliens = self.create_fleet(self.wave)
         self.drop_attempts = 0
@@ -389,23 +570,86 @@ class HeadlessGalagai:
 
     def create_fleet(self, wave: int) -> list[Actor]:
         aliens: list[Actor] = []
-        columns = min(9, 6 + wave)
-        rows = min(5, 3 + wave // 2)
-        gap_x = 78.0
-        gap_y = 54.0
-        start_x = (CANVAS_WIDTH - (columns - 1) * gap_x) / 2.0 - 24.0
+        columns = fleet_columns(wave)
+        rows = fleet_rows(wave)
+        gap_x = FLEET_GAP_X
+        gap_y = FLEET_GAP_Y
+        start_x = (CANVAS_WIDTH - (columns - 1) * gap_x) / 2.0 - FLEET_START_X_OFFSET
         for row in range(rows):
             for col in range(columns):
                 aliens.append(
                     Actor(
                         start_x + col * gap_x,
-                        74.0 + row * gap_y,
+                        FLEET_TOP_Y + row * gap_y,
                         ALIEN_WIDTH,
                         ALIEN_HEIGHT,
                         role=self.enemy_role_for_slot(row, col, wave),
                     )
                 )
         return aliens
+
+    def encode_frame(self, controlled_alien: Actor | None = None) -> np.ndarray:
+        frame = np.zeros(FRAME_SHAPE, dtype=np.float32)
+
+        def mark_rect(actor: Actor | Shot, channel: int, value: float = 1.0) -> None:
+            x0 = int(np.clip(actor.x / CANVAS_WIDTH * GRID_COLS, 0, GRID_COLS - 1))
+            x1 = int(np.clip((actor.x + actor.width) / CANVAS_WIDTH * GRID_COLS, 0, GRID_COLS - 1))
+            y0 = int(np.clip(actor.y / CANVAS_HEIGHT * GRID_ROWS, 0, GRID_ROWS - 1))
+            y1 = int(np.clip((actor.y + actor.height) / CANVAS_HEIGHT * GRID_ROWS, 0, GRID_ROWS - 1))
+            frame[channel, y0 : y1 + 1, x0 : x1 + 1] = value
+
+        mark_rect(self.ship, 0)
+
+        for bullet in self.bullets:
+            mark_rect(bullet, 1)
+
+        for shot in self.enemy_shots:
+            mark_rect(shot, 2)
+
+        for alien in self.aliens:
+            if not alien.alive:
+                continue
+            if alien.role == "bee":
+                mark_rect(alien, 3)
+            elif alien.role == "butterfly":
+                mark_rect(alien, 4)
+            elif alien.role == "boss":
+                mark_rect(alien, 5)
+
+        if controlled_alien is not None and controlled_alien.alive:
+            mark_rect(controlled_alien, 6)
+
+        for shot in self.enemy_shots:
+            danger_lane = Actor(
+                x=shot.x - SHIP_WIDTH * 0.45,
+                y=shot.y,
+                width=SHIP_WIDTH,
+                height=max(1.0, CANVAS_HEIGHT - shot.y),
+            )
+            mark_rect(danger_lane, 7, 0.5)
+
+        return frame
+
+    def scalar_features(self, controlled_alien: Actor | None = None) -> np.ndarray:
+        return np.asarray(
+            [
+                1.0 if self.fire_cooldown <= 0 else 0.0,
+                self._clamp01(self.wave / 10.0),
+                self._clamp01(self.lives / 3.0),
+                self._clamp01(self.ship.y / CANVAS_HEIGHT),
+                1.0 if controlled_alien is not None and self.can_enemy_fire(controlled_alien) else 0.0,
+                self.enemy_role_value(controlled_alien.role) if controlled_alien is not None else 0.0,
+            ],
+            dtype=np.float32,
+        )
+
+    def observation(self, controlled_alien: Actor | None = None) -> np.ndarray:
+        return np.concatenate(
+            [
+                self.encode_frame(controlled_alien).reshape(-1),
+                self.scalar_features(controlled_alien),
+            ]
+        ).astype(np.float32)
 
     @staticmethod
     def enemy_role_for_slot(row: int, col: int, wave: int) -> str:
@@ -416,79 +660,7 @@ class HeadlessGalagai:
         return "bee"
 
     def features(self, controlled_alien: Actor | None = None) -> np.ndarray:
-        ship_center = self.ship.center_x
-        live_aliens = [alien for alien in self.aliens if alien.alive]
-        target = min(live_aliens, key=lambda alien: abs(alien.center_x - ship_center), default=None)
-        controlled = controlled_alien if controlled_alien is not None and controlled_alien.alive else target
-        target_dx = self._relative_x(target.center_x - ship_center) if target else 0.0
-        target_dy = self._clamp(
-            ((target.center_y - self.ship.center_y) / CANVAS_HEIGHT) if target else 0.0,
-            -1.0,
-            1.0,
-        )
-
-        closest_shot = min(self.enemy_shots, key=lambda shot: abs(shot.center_x - ship_center), default=None)
-        danger_shot = self.dangerous_enemy_shot()
-        bullet_threat = self.dangerous_pilot_bullet(live_aliens)
-        threat_dx = self._relative_x(closest_shot.center_x - ship_center) if closest_shot else 1.0
-        threat_y = self._clamp01(closest_shot.y / CANVAS_HEIGHT) if closest_shot else 0.0
-        danger_dx = self._relative_x(danger_shot.center_x - ship_center) if danger_shot else 1.0
-        danger_y = self._clamp01(danger_shot.y / CANVAS_HEIGHT) if danger_shot else 0.0
-        danger_lane = self.shot_lane_overlap(danger_shot, self.ship) if danger_shot else 0.0
-        if bullet_threat is not None:
-            pilot_bullet, threatened_alien = bullet_threat
-            pilot_bullet_dx = self._relative_x(pilot_bullet.center_x - threatened_alien.center_x)
-            pilot_bullet_y = self._clamp(
-                (pilot_bullet.y - threatened_alien.bottom) / CANVAS_HEIGHT,
-                -1.0,
-                1.0,
-            )
-        else:
-            pilot_bullet_dx = 0.0
-            pilot_bullet_y = 0.0
-        fleet_y = self._clamp01(max((alien.y for alien in live_aliens), default=0.0) / CANVAS_HEIGHT)
-        bee_count = sum(1 for alien in live_aliens if alien.role == "bee")
-        gunship_count = sum(1 for alien in live_aliens if alien.role in {"butterfly", "boss"})
-        boss_count = sum(1 for alien in live_aliens if alien.role == "boss")
-        enemy_ship_dx = self._relative_x(controlled.center_x - ship_center) if controlled else 0.0
-        enemy_ship_y = self._clamp01(controlled.y / CANVAS_HEIGHT) if controlled else 0.0
-        enemy_ship_role = self.enemy_role_value(controlled.role) if controlled else 0.0
-        enemy_ship_fire_ready = 1.0 if controlled is not None and self.can_enemy_fire(controlled) else 0.0
-        enemy_ship_bullet_lane = self.pilot_bullet_lane_for(controlled) if controlled else 0.0
-        enemy_ship_bottom = self._clamp01(controlled.bottom / CANVAS_HEIGHT) if controlled else 0.0
-
-        return np.asarray(
-            [
-                target_dx,
-                abs(target_dx),
-                threat_dx,
-                threat_y,
-                1.0 if self.fire_cooldown <= 0 else 0.0,
-                self._clamp01(len(live_aliens) / MAX_ALIENS_NORMALIZER),
-                self._clamp01(self.wave / 10.0),
-                1.0 if self.enemy_drop_cooldown <= 0 else 0.0,
-                1.0,
-                fleet_y,
-                self._clamp01(self.lives / 3.0),
-                danger_dx,
-                danger_y,
-                danger_lane,
-                pilot_bullet_dx,
-                pilot_bullet_y,
-                self._clamp01(bee_count / MAX_ALIENS_NORMALIZER),
-                self._clamp01(gunship_count / MAX_ALIENS_NORMALIZER),
-                self._clamp01(boss_count / MAX_ALIENS_NORMALIZER),
-                self._clamp01(self.ship.y / CANVAS_HEIGHT),
-                target_dy,
-                enemy_ship_dx,
-                enemy_ship_y,
-                enemy_ship_role,
-                enemy_ship_fire_ready,
-                enemy_ship_bullet_lane,
-                enemy_ship_bottom,
-            ],
-            dtype=np.float32,
-        )
+        return self.observation(controlled_alien)
 
     @staticmethod
     def enemy_role_value(role: str) -> float:
@@ -531,12 +703,32 @@ class HeadlessGalagai:
             alien.shot_cooldown = max(0.0, alien.shot_cooldown - ACTION_DT)
             alien.down_cooldown = max(0.0, alien.down_cooldown - ACTION_DT)
 
-        action_features = self.features()
-        target_dx = float(action_features[0])
-        fleet_y = float(action_features[9])
-        pilot_bullet_dx = float(action_features[14])
-        pilot_bullet_y = float(action_features[15])
-        target_dy = float(action_features[20])
+        target = min(
+            [alien for alien in self.aliens if alien.alive],
+            key=lambda alien: abs(alien.center_x - self.ship.center_x),
+            default=None,
+        )
+        target_dx = self._relative_x(target.center_x - self.ship.center_x) if target else 0.0
+        target_dy = self._clamp(
+            ((target.center_y - self.ship.center_y) / CANVAS_HEIGHT) if target else 0.0,
+            -1.0,
+            1.0,
+        )
+        fleet_y = self._clamp01(
+            max((alien.y for alien in self.aliens if alien.alive), default=0.0) / CANVAS_HEIGHT
+        )
+        bullet_threat = self.dangerous_pilot_bullet([alien for alien in self.aliens if alien.alive])
+        if bullet_threat is not None:
+            pilot_bullet, threatened_alien = bullet_threat
+            pilot_bullet_dx = self._relative_x(pilot_bullet.center_x - threatened_alien.center_x)
+            pilot_bullet_y = self._clamp(
+                (pilot_bullet.y - threatened_alien.bottom) / CANVAS_HEIGHT,
+                -1.0,
+                1.0,
+            )
+        else:
+            pilot_bullet_dx = 0.0
+            pilot_bullet_y = 0.0
         enemy_actions = self.enemy_action_targets(enemy_action)
         pilot_aligned_action = self.is_pilot_aligned_action(pilot_action, target_dx, target_dy)
         pilot_aligned_fire = pilot_action == 2 and self.fire_cooldown <= 0 and abs(target_dx) < 0.16
@@ -577,7 +769,7 @@ class HeadlessGalagai:
         if self.live_alien_count == 0:
             self.wave += 1
             self.score += 250
-            self.fleet_speed += 13.0
+            self.fleet_speed += FLEET_SPEED_PER_WAVE
             self.fleet_direction = 1
             self.aliens = self.create_fleet(self.wave)
             self.bullets.clear()
@@ -687,7 +879,15 @@ class HeadlessGalagai:
     def fire_enemy_shot_from(self, alien: Actor) -> bool:
         if not self.can_enemy_fire(alien):
             return False
-        self.enemy_shots.append(Shot(alien.center_x - 3.0, alien.bottom, 6.0, 16.0, ENEMY_SHOT_SPEED + self.wave * 20.0))
+        self.enemy_shots.append(
+            Shot(
+                alien.center_x - 3.0,
+                alien.bottom,
+                6.0,
+                16.0,
+                ENEMY_SHOT_SPEED + self.wave * ENEMY_SHOT_SPEED_PER_WAVE,
+            )
+        )
         alien.shot_cooldown = ENEMY_SHIP_SHOT_COOLDOWN_SECONDS
         self.enemy_fires += 1
         return True
@@ -822,50 +1022,18 @@ class HeadlessGalagai:
         self.ship.x = CANVAS_WIDTH / 2.0 - SHIP_WIDTH / 2.0
         self.ship.y = SHIP_Y
 
+    def _reward_context(self, done: bool) -> RewardContext:
+        return RewardContext(
+            clear_speed=max(0.0, 1.0 - self.steps / max(1, self.max_steps)),
+            winner=self.winner(done),
+            live_alien_fraction=self.live_alien_count / max(1, len(self.aliens)),
+        )
+
     def pilot_reward(self, events: StepEvents, done: bool) -> float:
-        reward = events.score_gain / 35.0
-        clear_speed = max(0.0, 1.0 - self.steps / max(1, self.max_steps))
-        reward += 8.0 + 6.0 * clear_speed if events.wave_cleared else 0.0
-        reward += 1.15 * max(0, events.pilot_hits)
-        reward -= 7.0 * max(0, events.life_loss)
-        reward += 0.08 if events.pilot_aligned_action else 0.0
-        if events.pilot_fired:
-            reward += 0.42 if events.pilot_aligned_fire else -0.22
-        reward -= 0.48 if events.pilot_bad_fire else 0.0
-        reward -= 0.32 if events.pilot_missed else 0.0
-        reward -= 0.008
-        if done:
-            winner = self.winner(done)
-            if winner == "pilot":
-                reward += 6.0 + 3.0 * clear_speed
-            elif winner == "enemies":
-                reward -= 6.0
-            else:
-                reward -= 1.0
-        return float(reward)
+        return compute_pilot_reward(events, done, self._reward_context(done), self.reward_profile)
 
     def enemy_reward(self, events: StepEvents, done: bool) -> float:
-        clear_speed = max(0.0, 1.0 - self.steps / max(1, self.max_steps))
-        reward = 7.0 * max(0, events.life_loss)
-        reward -= 1.45 * max(0, events.aliens_destroyed)
-        reward -= events.score_gain / 55.0
-        reward -= 2.0 + 2.0 * clear_speed if events.wave_cleared else 0.0
-        reward += 0.02 * self.live_alien_count / max(1, len(self.aliens))
-        reward += 0.12 if events.enemy_tactical_action else 0.0
-        if events.valid_drop:
-            reward += 0.04 if events.enemy_tactical_action else -0.10
-        reward -= INVALID_DROP_PENALTY if events.invalid_drop else 0.0
-        reward -= 0.25 if events.invalid_fire else 0.0
-        reward += 0.05 if events.enemy_fired else 0.0
-        if done:
-            winner = self.winner(done)
-            if winner == "enemies":
-                reward += 6.0
-            elif winner == "pilot":
-                reward -= 5.0
-            else:
-                reward += 0.5
-        return float(reward)
+        return compute_enemy_reward(events, done, self._reward_context(done), self.reward_profile)
 
     def winner(self, done: bool) -> str:
         if not done:
@@ -2060,6 +2228,9 @@ def checkpoint_entry(role: str, model: DQN, version_id: int, metrics: dict[str, 
         "actions": actions,
         "features": FEATURES,
         "featureEncoding": FEATURE_ENCODING,
+        "frameShape": list(FRAME_SHAPE),
+        "gridChannels": GRID_CHANNELS,
+        "scalarFeatures": SCALAR_FEATURES,
         "network": export_network(model),
         **metric_fields,
     }
@@ -2226,13 +2397,23 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
         (model_dir / filename).write_text(json.dumps(entry, separators=(",", ":")) + "\n", encoding="utf-8")
         enemy_manifest_versions.append(manifest_checkpoint(entry, f"{MODEL_FILE_DIR}/{filename}"))
 
+    technique = technique_for_algorithm(RL_ALGORITHM)
     payload = {
         "model": "sb3-dqn-pilot",
         "version": MODEL_SCHEMA_VERSION,
-        "algorithm": "stable-baselines3-dqn",
+        "algorithm": RL_ALGORITHM,
+        # Brain-selector technique ids; the frontend marks these as the live
+        # techniques (js/model-lab.js). Per-side so a future exporter can train
+        # the pilot and the enemy with different families.
+        "technique": technique,
+        "techniques": {"pilot": technique, "enemies": technique},
+        "pilot": {"technique": technique},
         "actions": PILOT_ACTIONS,
         "features": FEATURES,
         "featureEncoding": FEATURE_ENCODING,
+        "frameShape": list(FRAME_SHAPE),
+        "gridChannels": GRID_CHANNELS,
+        "scalarFeatures": SCALAR_FEATURES,
         "networkRef": pilot_manifest_versions[-1]["url"],
         "versions": {
             "pilot": pilot_manifest_versions,
@@ -2240,9 +2421,13 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
         },
         "enemies": {
             "model": "sb3-dqn-enemies",
+            "technique": technique,
             "actions": ENEMY_ACTIONS,
             "features": FEATURES,
             "featureEncoding": FEATURE_ENCODING,
+            "frameShape": list(FRAME_SHAPE),
+            "gridChannels": GRID_CHANNELS,
+            "scalarFeatures": SCALAR_FEATURES,
             "networkRef": enemy_manifest_versions[-1]["url"],
             "constraints": {
                 "dropCooldownSeconds": DROP_COOLDOWN_SECONDS,

@@ -25,9 +25,47 @@ class StaticPilotArtifactTest(unittest.TestCase):
             self.assertGreaterEqual(rel(value), -1.0)
             self.assertLessEqual(rel(value), 1.0)
 
-    def test_exported_manifest_marks_wrap_feature_encoding(self):
-        self.assertEqual(train_static_pilot.FEATURE_ENCODING, "wrap-x")
-        self.assertEqual(train_static_pilot.MODEL_SCHEMA_VERSION, 15)
+    def test_exported_manifest_marks_grid_feature_encoding(self):
+        self.assertEqual(train_static_pilot.FEATURE_ENCODING, "grid-v1")
+        self.assertEqual(train_static_pilot.MODEL_SCHEMA_VERSION, 16)
+        self.assertEqual(train_static_pilot.FRAME_SHAPE, (8, 28, 48))
+        self.assertEqual(len(train_static_pilot.FEATURES), 8 * 28 * 48 + 6)
+
+    def test_grid_observation_marks_entities_and_scalars(self):
+        env = train_static_pilot.HeadlessGalagai(seed=101, max_steps=20)
+        alien = env.aliens[0]
+        env.bullets = [
+            train_static_pilot.Shot(
+                env.ship.center_x - 3,
+                env.ship.y - 40,
+                6,
+                18,
+                train_static_pilot.BULLET_SPEED,
+            )
+        ]
+        env.enemy_shots = [
+            train_static_pilot.Shot(
+                env.ship.center_x - 3,
+                env.ship.y - 100,
+                6,
+                16,
+                train_static_pilot.ENEMY_SHOT_SPEED,
+            )
+        ]
+
+        observation = env.features(alien)
+        frame_size = int(__import__("numpy").prod(train_static_pilot.FRAME_SHAPE))
+        frame = observation[:frame_size].reshape(train_static_pilot.FRAME_SHAPE)
+        scalars = observation[frame_size:]
+
+        self.assertEqual(observation.shape, (len(train_static_pilot.FEATURES),))
+        self.assertGreater(frame[0].sum(), 0.0)
+        self.assertGreater(frame[1].sum(), 0.0)
+        self.assertGreater(frame[2].sum(), 0.0)
+        self.assertGreater(frame[3].sum() + frame[4].sum() + frame[5].sum(), 0.0)
+        self.assertGreater(frame[6].sum(), 0.0)
+        self.assertGreater(frame[7].sum(), 0.0)
+        self.assertEqual(len(scalars), len(train_static_pilot.SCALAR_FEATURES))
 
     def test_environment_penalizes_drop_spam(self):
         env = train_static_pilot.HeadlessGalagai(seed=12, max_steps=20)
@@ -143,37 +181,6 @@ class StaticPilotArtifactTest(unittest.TestCase):
         env.ship.y = train_static_pilot.SHIP_MAX_Y + 100
         env.step(5, 0)
         self.assertEqual(env.ship.y, train_static_pilot.SHIP_MAX_Y)
-
-    def test_observation_exposes_incoming_shots_and_pilot_bullets(self):
-        env = train_static_pilot.HeadlessGalagai(seed=16, max_steps=20)
-        ship_center = env.ship.center_x
-        env.enemy_shots = [
-            train_static_pilot.Shot(ship_center + 220, 520, 6, 16, train_static_pilot.ENEMY_SHOT_SPEED),
-            train_static_pilot.Shot(ship_center - 3, 250, 6, 16, train_static_pilot.ENEMY_SHOT_SPEED),
-        ]
-
-        features = env.features()
-
-        self.assertAlmostEqual(float(features[11]), 0.0, delta=0.02)
-        self.assertGreater(float(features[12]), 0.4)
-        self.assertGreater(float(features[13]), 0.9)
-
-        threatened_alien = next(alien for alien in env.aliens if alien.alive)
-        env.bullets = [
-            train_static_pilot.Shot(
-                threatened_alien.center_x - 3,
-                threatened_alien.bottom + 70,
-                6,
-                18,
-                train_static_pilot.BULLET_SPEED,
-            )
-        ]
-
-        features = env.features()
-
-        self.assertAlmostEqual(float(features[14]), 0.0, delta=0.02)
-        self.assertGreater(float(features[15]), 0.0)
-        self.assertGreater(float(features[16]), 0.0)
 
     def test_opening_enemy_policy_respects_wave_roles(self):
         policy = train_static_pilot.OpeningEnemyPolicy()
@@ -447,7 +454,13 @@ class StaticPilotArtifactTest(unittest.TestCase):
             pilot_payload = json.loads((path.parent / payload["networkRef"]).read_text(encoding="utf-8"))
             enemy_payload = json.loads((path.parent / payload["enemies"]["networkRef"]).read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["version"], 15)
+        self.assertEqual(payload["version"], 16)
+        self.assertEqual(payload["featureEncoding"], "grid-v1")
+        self.assertEqual(payload["frameShape"], list(train_static_pilot.FRAME_SHAPE))
+        self.assertEqual(payload["gridChannels"], train_static_pilot.GRID_CHANNELS)
+        self.assertEqual(payload["scalarFeatures"], train_static_pilot.SCALAR_FEATURES)
+        self.assertEqual(payload["enemies"]["featureEncoding"], "grid-v1")
+        self.assertEqual(payload["enemies"]["frameShape"], list(train_static_pilot.FRAME_SHAPE))
         self.assertEqual(payload["algorithm"], "stable-baselines3-dqn")
         self.assertEqual(payload["actions"], train_static_pilot.PILOT_ACTIONS)
         self.assertEqual(payload["features"], train_static_pilot.FEATURES)
