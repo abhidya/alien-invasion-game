@@ -296,12 +296,6 @@ def publish_current_artifacts(args: argparse.Namespace, *, interrupted: bool = F
         commit_master(summary, no_push=args.no_push)
     if not args.no_pages:
         publish_pages(summary, no_push=args.no_push)
-    if not args.skip_public_check and not args.no_push and not args.no_pages:
-        public_manifest_check(
-            summary,
-            attempts=args.public_check_attempts,
-            delay_seconds=args.public_check_delay,
-        )
     return summary
 
 
@@ -529,48 +523,6 @@ def publish_pages(summary: dict[str, object], *, no_push: bool) -> bool:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def public_manifest_check(expected: dict[str, object], *, attempts: int = 18, delay_seconds: float = 10.0) -> None:
-    expected_public = {
-        "version": expected["version"],
-        "pilotVersions": expected["pilotVersions"],
-        "enemyVersions": expected["enemyVersions"],
-        "latestPilot": expected["latestPilot"],
-        "latestEnemy": expected["latestEnemy"],
-    }
-    last_summary: dict[str, object] | None = None
-    attempts = max(1, int(attempts))
-    delay_seconds = max(0.0, float(delay_seconds))
-    for attempt in range(1, attempts + 1):
-        url = f"https://abhidya.github.io/alien-invasion-game/js/galagai-model.json?model-check={int(time.time())}-{attempt}"
-        try:
-            output = run(["curl", "-fsSL", "--max-time", "20", url], capture=True)
-            data = json.loads(output)
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as error:
-            print(f"Public manifest check attempt {attempt} skipped/failed: {error}", flush=True)
-            if attempt < attempts:
-                time.sleep(delay_seconds)
-            continue
-        public_summary = {
-            "version": data.get("version"),
-            "pilotVersions": len(data.get("versions", {}).get("pilot", [])),
-            "enemyVersions": len(data.get("versions", {}).get("enemies", [])),
-            "latestPilot": data.get("networkRef"),
-            "latestEnemy": data.get("enemies", {}).get("networkRef") if isinstance(data.get("enemies"), dict) else None,
-        }
-        last_summary = public_summary
-        print(json.dumps({"publicManifest": public_summary, "attempt": attempt}, indent=2), flush=True)
-        if public_summary == expected_public:
-            return
-        if attempt < attempts:
-            time.sleep(delay_seconds)
-    raise RuntimeError(
-        f"Public Pages manifest is not serving the expected model artifact after {attempts} attempts. "
-        "The master and gh-pages pushes may already be complete; rerun with --skip-public-check "
-        "if GitHub Pages propagation is unusually slow. "
-        f"Expected {expected_public}, saw {last_summary}."
-    )
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train, prune, commit, push, and publish GalagAI model artifacts.")
     parser.add_argument("--add-rounds", type=int, default=24, help="Train this many more balanced rounds from the current checkpoint.")
@@ -607,9 +559,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-commit", action="store_true")
     parser.add_argument("--no-push", action="store_true")
     parser.add_argument("--no-pages", action="store_true")
-    parser.add_argument("--skip-public-check", action="store_true")
-    parser.add_argument("--public-check-attempts", type=int, default=18)
-    parser.add_argument("--public-check-delay", type=float, default=10.0)
     return parser.parse_args()
 
 

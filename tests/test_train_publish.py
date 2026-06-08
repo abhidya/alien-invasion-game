@@ -37,9 +37,6 @@ class TrainPublishTest(unittest.TestCase):
             no_commit=True,
             no_push=True,
             no_pages=True,
-            skip_public_check=True,
-            public_check_attempts=1,
-            public_check_delay=0.0,
             publish_interval_seconds=0.0,
         )
 
@@ -131,38 +128,6 @@ class TrainPublishTest(unittest.TestCase):
 
             args.no_resume = True
             train_publish.validate_resume_checkpoint(args)
-
-    def test_public_manifest_check_retries_until_pages_updates(self):
-        expected = {
-            "version": 14,
-            "pilotVersions": 18,
-            "enemyVersions": 1,
-            "latestPilot": "galagai-models/pilot-v023.json",
-            "latestEnemy": "galagai-models/enemies-v001.json",
-        }
-        stale = json.dumps(
-            {
-                "version": 10,
-                "versions": {"pilot": [{}], "enemies": [{}]},
-                "networkRef": "old-pilot.json",
-                "enemies": {"networkRef": "old-enemy.json"},
-            }
-        )
-        fresh = json.dumps(
-            {
-                "version": 14,
-                "versions": {"pilot": [{} for _ in range(18)], "enemies": [{}]},
-                "networkRef": "galagai-models/pilot-v023.json",
-                "enemies": {"networkRef": "galagai-models/enemies-v001.json"},
-            }
-        )
-        responses = [stale, fresh]
-
-        with mock.patch.object(train_publish, "run", side_effect=lambda *_args, **_kwargs: responses.pop(0)):
-            with mock.patch.object(train_publish.time, "sleep") as sleep:
-                train_publish.public_manifest_check(expected, attempts=2, delay_seconds=0.01)
-
-        sleep.assert_called_once_with(0.01)
 
 
 if __name__ == "__main__":
