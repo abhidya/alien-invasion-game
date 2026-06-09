@@ -1,6 +1,15 @@
 (function () {
   "use strict";
 
+  // Recommendation A: canonical game rules shared with the headless trainer.
+  // Loaded by js/game-spec.js (before this file) and pinned to game_spec.json by
+  // tests/test_game_spec_contract.py. An agent trained against the trainer plays
+  // under these exact physics in the browser.
+  var SPEC = window.GAME_SPEC;
+  if (!SPEC) {
+    throw new Error("GalagAI: js/game-spec.js must load before js/galagai.js");
+  }
+
   var canvas = document.getElementById("game");
   var ctx = canvas.getContext("2d");
   var scoreNode = document.getElementById("score");
@@ -46,6 +55,14 @@
   var enemyVersions = [];
   var activePilotVersion = 0;
   var activeEnemyVersion = 0;
+  // Per-side "brain" (technique) state. The pilot and the enemy can each run a
+  // different exported technique at once (e.g. PPO pilot vs DQN enemy). The main
+  // manifest is the default brain; manifest.brains maps other technique ids to
+  // their own manifest URLs, loaded lazily on selection.
+  var brainManifestObjects = {};
+  var brainManifestUrls = {};
+  var pilotBrainId = null;
+  var enemyBrainId = null;
   var modelManifestUrl = "js/galagai-model.json";
   var modelCache = {};
   var pilotLoadTicket = 0;
@@ -69,6 +86,123 @@
     return image;
   }
 
+  // Map a trainer algorithm string to a brain-selector technique id (js/model-lab.js).
+  function mapAlgorithmToTechnique(algorithm) {
+    var a = String(algorithm || "").toLowerCase();
+    if (a.indexOf("maskable") >= 0) return "maskable-ppo";
+    if (a.indexOf("qr") >= 0 || a.indexOf("quantile") >= 0) return "qr-dqn";
+    if (a.indexOf("ppo") >= 0) return "ppo";
+    if (a.indexOf("deepset") >= 0 || a.indexOf("attention") >= 0) return "deepset-attn";
+    if (a.indexOf("neat") >= 0 || a.indexOf("neuro") >= 0 || a.indexOf("-es") >= 0) return "neuro-es";
+    return "dqn";
+  }
+
+  // Tell the brain selector which technique actually drives each side, derived
+  // from the loaded manifest. Per-side `technique` overrides the top-level
+  // algorithm when the unified exporter records it.
+  function publishRuntime(model) {
+    model = model || {};
+    var base = mapAlgorithmToTechnique(model.algorithm);
+    window.GalagAIRuntime = {
+      algorithm: model.algorithm || null,
+      // Reflect the brain actually driving each side (may differ once mixed).
+      pilotTechniqueId: pilotBrainId || (model.pilot && model.pilot.technique) || base,
+      enemyTechniqueId: enemyBrainId || (model.enemies && model.enemies.technique) || base
+    };
+    try {
+      window.dispatchEvent(new CustomEvent("galagai:runtime", { detail: window.GalagAIRuntime }));
+    } catch (e) {
+      /* CustomEvent unsupported -- selector keeps its defaults. */
+    }
+  }
+
+  // Register the techniques that have exported artifacts. The default technique
+  // (this manifest) is always available; manifest.brains adds the rest by URL.
+  function registerBrains(model) {
+    var base = (model.pilot && model.pilot.technique) || mapAlgorithmToTechnique(model.algorithm);
+    brainManifestObjects = {};
+    brainManifestUrls = {};
+    brainManifestObjects[base] = model;
+    pilotBrainId = base;
+    enemyBrainId = (model.enemies && model.enemies.technique) || base;
+    if (model.brains && typeof model.brains === "object") {
+      Object.keys(model.brains).forEach(function (tech) {
+        var entry = model.brains[tech];
+        var url = typeof entry === "string" ? entry : (entry && entry.manifest);
+        if (url && !brainManifestObjects[tech]) brainManifestUrls[tech] = url;
+      });
+    }
+  }
+
+  function availableBrains() {
+    var ids = {};
+    Object.keys(brainManifestObjects).forEach(function (k) { ids[k] = true; });
+    Object.keys(brainManifestUrls).forEach(function (k) { ids[k] = true; });
+    return Object.keys(ids);
+  }
+
+  // A brain manifest's checkpoint files are stored next to that manifest, but
+  // hydrateVersion resolves version urls against the main manifest. Rewrite a
+  // loaded brain's version urls to absolute (against the brain's own location)
+  // so checkpoints load from the brain's directory, not the main one.
+  function absolutizeBrainVersions(manifest, brainBaseUrl) {
+    function fix(entry) {
+      if (entry && entry.url) entry.url = new URL(entry.url, brainBaseUrl).toString();
+      if (entry && entry.networkRef) entry.networkRef = new URL(entry.networkRef, brainBaseUrl).toString();
+      return entry;
+    }
+    var versions = manifest.versions || {};
+    (versions.pilot || []).forEach(fix);
+    (versions.enemies || []).forEach(fix);
+    if (manifest.enemies) fix(manifest.enemies);
+    return manifest;
+  }
+
+  function loadBrainManifest(technique) {
+    if (brainManifestObjects[technique]) return Promise.resolve(brainManifestObjects[technique]);
+    var url = brainManifestUrls[technique];
+    if (!url) return Promise.reject(new Error("brain not exported: " + technique));
+    var absolute = new URL(url, new URL(modelManifestUrl, window.location.href)).toString();
+    return fetch(absolute)
+      .then(function (response) {
+        if (!response.ok) throw new Error("brain manifest unavailable");
+        return response.json();
+      })
+      .then(function (manifest) {
+        absolutizeBrainVersions(manifest, absolute);
+        brainManifestObjects[technique] = manifest;
+        return manifest;
+      });
+  }
+
+  // Swap the technique driving one side. Pilot and enemy are independent, so
+  // selecting a pilot brain never disturbs the enemy and vice-versa.
+  function setBrain(side, technique) {
+    return loadBrainManifest(technique).then(function (manifest) {
+      if (side === "pilot") {
+        pilotVersions = extractPilotVersions(manifest);
+        activePilotVersion = Math.max(0, pilotVersions.length - 1);
+        pilotBrainId = technique;
+        configureVersionSlider(versionNodes.pilotSlider, pilotVersions, activePilotVersion);
+        loadSelectedVersion("pilot");
+      } else {
+        enemyVersions = extractEnemyVersions(manifest);
+        activeEnemyVersion = Math.max(0, enemyVersions.length - 1);
+        enemyBrainId = technique;
+        updateEnemyModelForMode();
+      }
+      publishRuntime(manifest);
+      updateHud();
+      return technique;
+    });
+  }
+
+  window.GalagAI = {
+    setBrain: setBrain,
+    availableBrains: availableBrains,
+    currentBrain: function (side) { return side === "pilot" ? pilotBrainId : enemyBrainId; }
+  };
+
   function loadPilotModel() {
     fetch(modelManifestUrl)
       .then(function (response) {
@@ -77,11 +211,13 @@
       })
       .then(function (model) {
         if (!isUsableManifest(model)) return;
+        registerBrains(model);
         pilotVersions = extractPilotVersions(model);
         enemyVersions = extractEnemyVersions(model);
         activePilotVersion = Math.max(0, pilotVersions.length - 1);
         activeEnemyVersion = Math.max(0, enemyVersions.length - 1);
         applySelectedVersions();
+        publishRuntime(model);
         updateHud();
       })
       .catch(function () {
@@ -117,20 +253,35 @@
     );
   }
 
+  // Per-version checkpoint entries may not carry the inference head fields, so
+  // inherit them from the manifest (or per-side block). Keeps quantile folding
+  // and action masking working regardless of where the field is recorded.
+  function stampHead(versions, head, masking) {
+    return versions.map(function (version) {
+      return Object.assign({}, version, {
+        outputHead: version.outputHead || head,
+        actionMasking: version.actionMasking != null ? version.actionMasking : Boolean(masking)
+      });
+    });
+  }
+
   function extractPilotVersions(model) {
     var versions = model.versions && Array.isArray(model.versions.pilot)
       ? model.versions.pilot.filter(isLoadableVersion)
       : [];
-    if (versions.length) return versions;
-    return [model];
+    if (versions.length) return stampHead(versions, model.outputHead, model.actionMasking);
+    return stampHead([model], model.outputHead, model.actionMasking);
   }
 
   function extractEnemyVersions(model) {
+    var enemy = model.enemies || {};
+    var head = enemy.outputHead || model.outputHead;
+    var masking = enemy.actionMasking != null ? enemy.actionMasking : model.actionMasking;
     var versions = model.versions && Array.isArray(model.versions.enemies)
       ? model.versions.enemies.filter(isLoadableVersion)
       : [];
-    if (versions.length) return versions;
-    return isUsableModel(model.enemies) ? [model.enemies] : [];
+    if (versions.length) return stampHead(versions, head, masking);
+    return isUsableModel(model.enemies) ? stampHead([model.enemies], head, masking) : [];
   }
 
   function applySelectedVersions() {
@@ -237,36 +388,36 @@
       lives: 3,
       message: "Press Start",
       ship: {
-        x: canvas.width / 2 - 32,
-        y: canvas.height - 72,
-        width: 64,
-        height: 48,
-        speed: 470,
-        verticalSpeed: 330
+        x: canvas.width / 2 - SPEC.ship.width / 2,
+        y: canvas.height - SPEC.ship.yOffset,
+        width: SPEC.ship.width,
+        height: SPEC.ship.height,
+        speed: SPEC.ship.speed,
+        verticalSpeed: SPEC.ship.verticalSpeed
       },
       bullets: [],
       enemyShots: [],
       aliens: createFleet(1),
       fleetDirection: 1,
-      fleetDrop: 18,
-      fleetSpeed: 38
+      fleetDrop: SPEC.fleet.drop,
+      fleetSpeed: SPEC.fleet.baseSpeed
     };
   }
 
   function createFleet(wave) {
     var aliens = [];
-    var columns = Math.min(9, 6 + wave);
-    var rows = Math.min(5, 3 + Math.floor(wave / 2));
-    var gapX = 78;
-    var gapY = 54;
-    var startX = (canvas.width - (columns - 1) * gapX) / 2 - 24;
+    var columns = Math.min(SPEC.fleet.columns.max, SPEC.fleet.columns.base + SPEC.fleet.columns.perWave * wave);
+    var rows = Math.min(SPEC.fleet.rows.max, SPEC.fleet.rows.base + Math.floor(wave / SPEC.fleet.rows.perWavePeriod));
+    var gapX = SPEC.fleet.gapX;
+    var gapY = SPEC.fleet.gapY;
+    var startX = (canvas.width - (columns - 1) * gapX) / 2 - SPEC.fleet.startXOffset;
     for (var row = 0; row < rows; row += 1) {
       for (var col = 0; col < columns; col += 1) {
         aliens.push({
           x: startX + col * gapX,
-          y: 74 + row * gapY,
-          width: 48,
-          height: 34,
+          y: SPEC.fleet.topY + row * gapY,
+          width: SPEC.alien.width,
+          height: SPEC.alien.height,
           type: (row + col) % 2,
           role: enemyRoleForSlot(row, col, wave),
           alive: true,
@@ -407,7 +558,7 @@
       state.wave += 1;
       state.aliens = createFleet(state.wave);
       state.fleetDirection = 1;
-      state.fleetSpeed += 13;
+      state.fleetSpeed += SPEC.fleet.speedPerWave;
       state.score += 250;
       updateEnemyModelForMode();
       updateHud();
@@ -429,7 +580,11 @@
   }
 
   function runModelPilot() {
-    var action = predictModelAction(pilotModel, "stay", pilotFeatures(modelUsesWrap(pilotModel)));
+    var features = modelUsesGrid(pilotModel)
+      ? fullGridFeatures(null)
+      : pilotFeatures(modelUsesWrap(pilotModel));
+    var mask = pilotModel.actionMasking ? pilotActionMask(pilotModel) : null;
+    var action = predictModelAction(pilotModel, "stay", features, mask);
     keys.ArrowLeft = action === "left";
     keys.ArrowRight = action === "right";
     keys.ArrowUp = action === "up";
@@ -437,13 +592,21 @@
     if (action === "fire") fire();
   }
 
-  function predictModelAction(model, fallback, featureOverride) {
+  function predictModelAction(model, fallback, featureOverride, mask) {
     if (!model) return fallback;
     var features = modelFeatures(model, featureOverride);
     var scores = model.network ? evaluateNetwork(model.network, features) : null;
+    // QR-DQN emits |A|x N quantiles; the Q-value per action is the mean over
+    // quantiles. Fold before argmax when the manifest marks a quantile head.
+    if (scores && model.outputHead === "quantiles") {
+      scores = foldQuantiles(scores, model.actions.length);
+    }
     var bestAction = fallback;
     var bestScoreForAction = -Infinity;
     model.actions.forEach(function (action, actionIndex) {
+      // MaskablePPO: skip actions the mask marks illegal (equivalent to setting
+      // their logits to -Infinity before the argmax).
+      if (mask && mask[actionIndex] === false) return;
       var score = scores
         ? Number(scores[actionIndex] || 0)
         : features.reduce(function (total, value, featureIndex) {
@@ -457,8 +620,47 @@
     return bestAction;
   }
 
+  // Mean-over-quantiles fold for a QR-DQN output. The flat vector is ordered
+  // [q0a0, q0a1, ..., q1a0, ...] (n_quantiles x num_actions, row-major), so the
+  // quantiles for action a are at stride numActions starting at a.
+  function foldQuantiles(scores, numActions) {
+    if (!numActions || scores.length % numActions !== 0) return scores;
+    var quantiles = scores.length / numActions;
+    var folded = new Array(numActions);
+    for (var a = 0; a < numActions; a += 1) {
+      var sum = 0;
+      for (var q = 0; q < quantiles; q += 1) sum += Number(scores[a + q * numActions] || 0);
+      folded[a] = sum / quantiles;
+    }
+    return folded;
+  }
+
+  // Legal-action masks matching the trainer's env (action_masks). Only used when
+  // the manifest sets actionMasking (MaskablePPO); other models pass no mask.
+  function pilotActionMask(model) {
+    return model.actions.map(function (action) {
+      if (action === "fire") return fireCooldown <= 0;
+      return true;
+    });
+  }
+
+  function enemyActionMask(model, alien) {
+    var canFire = canAlienFire(alien);
+    var canDown = (alien.downCooldown || 0) <= 0 && (alien.y + alien.height) < canvas.height;
+    return model.actions.map(function (action) {
+      if (action.indexOf("fire") !== -1 && !canFire) return false;
+      if ((action === "down" || action === "down_fire") && !canDown) return false;
+      return true;
+    });
+  }
+
   function modelFeatures(model, featureOverride) {
-    var features = featureOverride || pilotFeatures();
+    var features;
+    if (modelUsesGrid(model)) {
+      features = featureOverride || fullGridFeatures(null);
+    } else {
+      features = featureOverride || pilotFeatures();
+    }
     var expected = Array.isArray(model.features) ? model.features.length : features.length;
     return features.slice(0, expected);
   }
@@ -490,7 +692,12 @@
     var summary = { left: 0, right: 0, down: 0, fire: 0, invalid: 0 };
     var wrap = modelUsesWrap(enemyModel);
     liveAliens.forEach(function (alien) {
-      var action = predictModelAction(enemyModel, "hold", enemyFeatures(alien, wrap));
+      var action = predictModelAction(
+        enemyModel,
+        "hold",
+        modelUsesGrid(enemyModel) ? fullGridFeatures(alien) : enemyFeatures(alien, wrap),
+        enemyModel.actionMasking ? enemyActionMask(enemyModel, alien) : null
+      );
       applyEnemyShipAction(action, alien, summary);
     });
     enemyAction = enemyActionSummary(summary);
@@ -512,8 +719,8 @@
     }
     if (action === "down" || action === "down_fire") {
       if ((alien.downCooldown || 0) <= 0) {
-        alien.y += state.fleetDrop * 0.7;
-        alien.downCooldown = 0.45;
+        alien.y += state.fleetDrop * SPEC.enemyControl.stepYFactor;
+        alien.downCooldown = SPEC.timing.enemyShipDownCooldown;
         summary.down += 1;
       } else {
         summary.invalid += 1;
@@ -596,10 +803,12 @@
   }
 
   function modelUsesWrap(model) {
-    // Models exported with the toroidal (wrap-around) feature encoding carry a
-    // "featureEncoding" marker (schema >= 15). Older linear-encoded models do not.
     return Boolean(model && (model.featureEncoding === "wrap-x" ||
-      (typeof model.version === "number" && model.version >= 15)));
+      (typeof model.version === "number" && model.version >= 15 && model.featureEncoding !== "grid-v1")));
+  }
+
+  function modelUsesGrid(model) {
+    return Boolean(model && model.featureEncoding === "grid-v1");
   }
 
   function relativeX(delta, wrap) {
@@ -612,6 +821,37 @@
       delta = (((delta + half) % width) + width) % width - half;
     }
     return clamp(delta / half, -1, 1);
+  }
+
+  // Recommendation B: the grid observation is produced by the shared, DOM-free
+  // encoder in js/encoder.js (window.GalagAIEncoder) -- the exact layout the
+  // Python trainer mirrors and tests/test_encoder_*.py pin to golden vectors. We
+  // assemble a runtime-neutral "scene" from live state and hand it to the encoder
+  // so the browser and the trainer can never silently disagree on what a state
+  // looks like to the agent.
+  if (!window.GalagAIEncoder) {
+    throw new Error("GalagAI: js/encoder.js must load before js/galagai.js");
+  }
+
+  function buildScene(controlledAlien) {
+    var controlledIndex = controlledAlien ? state.aliens.indexOf(controlledAlien) : -1;
+    return {
+      canvas: { width: canvas.width, height: canvas.height },
+      ship: state.ship,
+      bullets: state.bullets,
+      enemyShots: state.enemyShots,
+      aliens: state.aliens,
+      controlledIndex: controlledIndex >= 0 ? controlledIndex : null,
+      fireReady: fireCooldown <= 0,
+      wave: state.wave,
+      lives: state.lives,
+      controlledCanFire: controlledAlien ? canAlienFire(controlledAlien) : false,
+      controlledRoleValue: controlledAlien ? enemyRoleValue(controlledAlien.role) : 0
+    };
+  }
+
+  function fullGridFeatures(controlledAlien) {
+    return window.GalagAIEncoder.encodeObservation(buildScene(controlledAlien));
   }
 
   function pilotFeatures(wrap) {
@@ -880,9 +1120,11 @@
       y: alien.y + alien.height,
       width: 6,
       height: 16,
-      speed: 210 + state.wave * 20
+      // Spec-aligned (was 210 in the browser vs 230 in the trainer -- a silent
+      // sim-to-real drift the single-source-of-truth seam exposed).
+      speed: SPEC.enemyShot.speed + state.wave * SPEC.enemyShot.speedPerWave
     });
-    alien.shotCooldown = 0.65;
+    alien.shotCooldown = SPEC.timing.enemyShipShotCooldown;
     return true;
   }
 
@@ -925,7 +1167,7 @@
       y: state.ship.y - 14,
       width: 6,
       height: 18,
-      speed: 620
+      speed: SPEC.bullet.speed
     });
     fireCooldown = 0.17;
   }

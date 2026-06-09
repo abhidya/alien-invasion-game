@@ -1,0 +1,37 @@
+{
+  "_comment": "Canonical GalagAI game rules. Single source of truth for the browser runtime (js/galagai.js via js/game-spec.js) and the headless trainer (tools/train_static_pilot.py via tools/game_spec.py). An agent trained against the trainer is deployed into the runtime, so these MUST agree. tests/test_game_spec_contract.py pins all three copies to this file; do not edit the duplicates by hand.",
+  "schemaVersion": 1,
+  "canvas": { "width": 960, "height": 560 },
+  "ship": {
+    "width": 64,
+    "height": 48,
+    "speed": 470,
+    "verticalSpeed": 330,
+    "yOffset": 72,
+    "minYOffset": 170,
+    "maxYOffset": 56
+  },
+  "alien": { "width": 48, "height": 34 },
+  "bullet": { "speed": 620 },
+  "enemyShot": { "speed": 230, "speedPerWave": 20 },
+  "fleet": {
+    "drop": 18,
+    "baseSpeed": 38,
+    "speedPerWave": 13,
+    "gapX": 78,
+    "gapY": 54,
+    "topY": 74,
+    "startXOffset": 24,
+    "columns": { "base": 6, "perWave": 1, "max": 9 },
+    "rows": { "base": 3, "perWavePeriod": 2, "max": 5 }
+  },
+  "timing": {
+    "actionDt": 0.12,
+    "dropCooldown": 1.08,
+    "enemyShotCooldown": 0.0,
+    "enemyShipDownCooldown": 0.45,
+    "enemyShipShotCooldown": 0.65
+  },
+  "enemyControl": { "stepX": 32, "stepYFactor": 0.7 },
+  "limits": { "maxAliensNormalizer": 45, "maxEnemyShotsPerStep": 4 }
+}

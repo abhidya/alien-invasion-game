@@ -173,6 +173,43 @@
       ]
     },
     {
+      id: "a2c",
+      name: "Advantage Actor-Critic",
+      family: "Policy-gradient / actor-critic",
+      status: "trainable",
+      accent: "#ff4fc3",
+      tagline: "PPO's simpler synchronous cousin. Same stochastic actor and identical plain-MLP export, lighter to run.",
+      facts: [
+        { label: "Library", value: "stable-baselines3 (core)" },
+        { label: "Action space", value: "Discrete" },
+        { label: "Browser runtime", value: "Hand-rolled JS" },
+        { label: "Export", value: "Actor MLP → logits" }
+      ],
+      sections: [
+        {
+          h: "Design",
+          p: [
+            "A2C is the synchronous, deterministic form of actor-critic: it estimates an advantage and nudges a stochastic policy toward better-than-average actions. It shares PPO's on-policy footing — no replay buffer, so no stale experience from obsolete self-play opponents and no replay-pickle disk cost.",
+            "It omits PPO's clipped trust region, so it is simpler and faster per step but a touch less stable; a reasonable lightweight fallback when PPO's robustness is not required."
+          ],
+          ul: [
+            "Identical export to PPO: the actor is a plain state→logits MLP.",
+            "On-policy and reproducible; pairs well with the unified self-play loop."
+          ]
+        },
+        {
+          h: "Implementation",
+          p: [
+            "Train with SB3 A2C + MlpPolicy. Export only the actor (mlp_extractor.policy_net + action_net) and argmax in JS — the same path PPO uses, so the browser runtime is unchanged."
+          ]
+        }
+      ],
+      sources: [
+        { label: "A2C / A3C overview", url: "https://apxml.com/courses/advanced-reinforcement-learning/chapter-3-advanced-policy-gradients-actor-critic/a2c-a3c" },
+        { label: "DQN vs PPO vs A2C study", url: "https://arxiv.org/html/2407.14151v1" }
+      ]
+    },
+    {
       id: "maskable-ppo",
       name: "MaskablePPO",
       family: "Policy-gradient (action-masked)",
@@ -280,6 +317,154 @@
       ]
     }
   ];
+
+  // Pros / cons / caveats per design, merged into the records above. Kept as a
+  // separate map so the trade-off content sits in one readable block and is
+  // reused verbatim by both the gallery detail view and the brain selector
+  // (js/model-lab.js).
+  var TRADEOFFS = {
+    dqn: {
+      pros: [
+        "Live today: real exported weights play in the browser.",
+        "Trivial export — dense weights to JSON, ~30 lines of JS inference.",
+        "Sample-efficient via replay buffer; zero runtime dependencies."
+      ],
+      cons: [
+        "Deterministic argmax policy is brittle against a shifting self-play opponent.",
+        "Q-overestimation can destabilise bootstrapped self-play.",
+        "No notion of action legality — can waste capacity on illegal moves."
+      ],
+      caveats: [
+        "Schema v14 used legacy linear features; v15+ uses the wrap-aware grid.",
+        "The browser must reproduce the trainer's observation exactly (see js/encoder.js)."
+      ]
+    },
+    "dqn-plus": {
+      pros: [
+        "n-step + PER lift sample efficiency with no deploy-time change.",
+        "Double/Dueling cut Q-overestimation cheaply.",
+        "Acting network shape unchanged — existing JSON export just works."
+      ],
+      cons: [
+        "Extra training-time machinery (prioritised buffer, n-step targets).",
+        "Still a deterministic value policy at deploy.",
+        "PER adds hyperparameters to tune."
+      ],
+      caveats: [
+        "All gains are training-only; the deployed net is identical to DQN.",
+        "Needs a retrain to publish — no new artifact exists yet."
+      ]
+    },
+    "qr-dqn": {
+      pros: [
+        "Models the full return distribution — richer, more robust signal.",
+        "Beats categorical C51 on Atari while still exporting as an MLP.",
+        "Browser inference is mean-over-quantiles then argmax (a few lines)."
+      ],
+      cons: [
+        "Output layer is |A|×N quantiles — wider net, more memory.",
+        "Still value-based and deterministic at deploy.",
+        "Requires sb3-contrib rather than core SB3."
+      ],
+      caveats: [
+        "The manifest must record the quantile count so JS folds the output right.",
+        "Not yet wired into the export — train to enable."
+      ]
+    },
+    ppo: {
+      pros: [
+        "Stochastic policy handles a moving opponent better than greedy DQN.",
+        "On-policy — never reuses stale experience from obsolete opponents.",
+        "Strong, hyperparameter-robust self-play default."
+      ],
+      cons: [
+        "Less sample-efficient than replay-based methods.",
+        "Must export only the actor and replay SB3 preprocessing in JS.",
+        "Critic is wasted compute at deploy time."
+      ],
+      caveats: [
+        "Observation preprocessing is NOT bundled in the export — mirror it in JS.",
+        "No PPO artifact published yet."
+      ]
+    },
+    a2c: {
+      pros: [
+        "Simpler and faster per step than PPO; deterministic and reproducible.",
+        "On-policy — no replay buffer, so no stale experience and no replay-pickle disk cost.",
+        "Identical plain-MLP actor export to PPO; browser runtime unchanged."
+      ],
+      cons: [
+        "No clipped trust region, so updates are a touch less stable than PPO.",
+        "Less sample-efficient than replay-based value methods.",
+        "Critic is wasted compute at deploy time."
+      ],
+      caveats: [
+        "Mirror SB3 observation preprocessing in JS, same as PPO.",
+        "No A2C artifact published yet."
+      ]
+    },
+    "maskable-ppo": {
+      pros: [
+        "Knows which actions are legal — directly fits this game's role asymmetry.",
+        "Masking is a valid policy gradient, not a reward hack.",
+        "Actor stays a plain MLP, so static export is unaffected."
+      ],
+      cons: [
+        "Requires an action_masks() method from the env.",
+        "Browser must rebuild the exact mask before argmax.",
+        "sb3-contrib dependency."
+      ],
+      caveats: [
+        "Mask logic must match between trainer and browser or behaviour diverges.",
+        "Manifest carries the per-state mask spec; not yet exported."
+      ]
+    },
+    "neuro-es": {
+      pros: [
+        "Gradient-free — sidesteps reward-shaping headaches entirely.",
+        "Fitness is match outcome; parallelises trivially across workers.",
+        "Champion exports as plain weight arrays — cleanest possible browser path."
+      ],
+      cons: [
+        "Sample-inefficient relative to gradient methods.",
+        "Population evaluation is compute-heavy.",
+        "NEAT topology search adds its own complexity."
+      ],
+      caveats: [
+        "Use a historical-opponent archive to avoid cycling, same as gradient self-play.",
+        "Best reserved for when gradient self-play stalls; no artifact yet."
+      ]
+    },
+    "deepset-attn": {
+      pros: [
+        "Permutation-invariant over a variable-size fleet — the 'correct' representation.",
+        "Mean-pool Deep-Set stays hand-rollable in JS.",
+        "Attention adds alien–alien reasoning when needed."
+      ],
+      cons: [
+        "Needs a per-entity observation refactor in the env first.",
+        "Attention variants require ONNX Runtime Web (WASM), not plain JS.",
+        "Only pays off if the fixed nearest-N hack is shown to hurt."
+      ],
+      caveats: [
+        "Marked planned — not wired into the pipeline.",
+        "Attention export is heavier; load it lazily so MLP-only visitors pay nothing."
+      ]
+    }
+  };
+
+  DESIGNS.forEach(function (design) {
+    var extra = TRADEOFFS[design.id];
+    if (extra) {
+      design.pros = extra.pros;
+      design.cons = extra.cons;
+      design.caveats = extra.caveats;
+    }
+  });
+
+  // Shared with js/model-lab.js (the pilot/enemy brain selector) so the gallery
+  // and the selector describe each technique from one source.
+  window.GALAGAI_DESIGNS = DESIGNS;
 
   var STATUS_LABELS = {
     live: "Live in demo",
@@ -394,6 +579,19 @@
         panel.appendChild(list);
       }
     });
+
+    function tradeoffList(title, items, cssClass) {
+      if (!items || !items.length) return;
+      panel.appendChild(el("h3", "arch-section-title", title));
+      var list = el("ul", "arch-section-list " + cssClass);
+      items.forEach(function (item) {
+        list.appendChild(el("li", null, item));
+      });
+      panel.appendChild(list);
+    }
+    tradeoffList("Pros", design.pros, "arch-pros");
+    tradeoffList("Cons", design.cons, "arch-cons");
+    tradeoffList("Caveats", design.caveats, "arch-caveats");
 
     if (design.sources && design.sources.length) {
       panel.appendChild(el("h3", "arch-section-title", "Sources"));
