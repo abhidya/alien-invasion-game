@@ -72,6 +72,7 @@ def publish_command(
         str(target_rounds),
         "--no-push",
         "--no-pages",
+        "--no-commit",
         "--skip-tests",
         *shared_args,
     ]
