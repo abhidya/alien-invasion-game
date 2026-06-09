@@ -253,20 +253,35 @@
     );
   }
 
+  // Per-version checkpoint entries may not carry the inference head fields, so
+  // inherit them from the manifest (or per-side block). Keeps quantile folding
+  // and action masking working regardless of where the field is recorded.
+  function stampHead(versions, head, masking) {
+    return versions.map(function (version) {
+      return Object.assign({}, version, {
+        outputHead: version.outputHead || head,
+        actionMasking: version.actionMasking != null ? version.actionMasking : Boolean(masking)
+      });
+    });
+  }
+
   function extractPilotVersions(model) {
     var versions = model.versions && Array.isArray(model.versions.pilot)
       ? model.versions.pilot.filter(isLoadableVersion)
       : [];
-    if (versions.length) return versions;
-    return [model];
+    if (versions.length) return stampHead(versions, model.outputHead, model.actionMasking);
+    return stampHead([model], model.outputHead, model.actionMasking);
   }
 
   function extractEnemyVersions(model) {
+    var enemy = model.enemies || {};
+    var head = enemy.outputHead || model.outputHead;
+    var masking = enemy.actionMasking != null ? enemy.actionMasking : model.actionMasking;
     var versions = model.versions && Array.isArray(model.versions.enemies)
       ? model.versions.enemies.filter(isLoadableVersion)
       : [];
-    if (versions.length) return versions;
-    return isUsableModel(model.enemies) ? [model.enemies] : [];
+    if (versions.length) return stampHead(versions, head, masking);
+    return isUsableModel(model.enemies) ? stampHead([model.enemies], head, masking) : [];
   }
 
   function applySelectedVersions() {
@@ -568,7 +583,8 @@
     var features = modelUsesGrid(pilotModel)
       ? fullGridFeatures(null)
       : pilotFeatures(modelUsesWrap(pilotModel));
-    var action = predictModelAction(pilotModel, "stay", features);
+    var mask = pilotModel.actionMasking ? pilotActionMask(pilotModel) : null;
+    var action = predictModelAction(pilotModel, "stay", features, mask);
     keys.ArrowLeft = action === "left";
     keys.ArrowRight = action === "right";
     keys.ArrowUp = action === "up";
@@ -576,13 +592,21 @@
     if (action === "fire") fire();
   }
 
-  function predictModelAction(model, fallback, featureOverride) {
+  function predictModelAction(model, fallback, featureOverride, mask) {
     if (!model) return fallback;
     var features = modelFeatures(model, featureOverride);
     var scores = model.network ? evaluateNetwork(model.network, features) : null;
+    // QR-DQN emits |A|x N quantiles; the Q-value per action is the mean over
+    // quantiles. Fold before argmax when the manifest marks a quantile head.
+    if (scores && model.outputHead === "quantiles") {
+      scores = foldQuantiles(scores, model.actions.length);
+    }
     var bestAction = fallback;
     var bestScoreForAction = -Infinity;
     model.actions.forEach(function (action, actionIndex) {
+      // MaskablePPO: skip actions the mask marks illegal (equivalent to setting
+      // their logits to -Infinity before the argmax).
+      if (mask && mask[actionIndex] === false) return;
       var score = scores
         ? Number(scores[actionIndex] || 0)
         : features.reduce(function (total, value, featureIndex) {
@@ -594,6 +618,40 @@
       }
     });
     return bestAction;
+  }
+
+  // Mean-over-quantiles fold for a QR-DQN output. The flat vector is ordered
+  // [q0a0, q0a1, ..., q1a0, ...] (n_quantiles x num_actions, row-major), so the
+  // quantiles for action a are at stride numActions starting at a.
+  function foldQuantiles(scores, numActions) {
+    if (!numActions || scores.length % numActions !== 0) return scores;
+    var quantiles = scores.length / numActions;
+    var folded = new Array(numActions);
+    for (var a = 0; a < numActions; a += 1) {
+      var sum = 0;
+      for (var q = 0; q < quantiles; q += 1) sum += Number(scores[a + q * numActions] || 0);
+      folded[a] = sum / quantiles;
+    }
+    return folded;
+  }
+
+  // Legal-action masks matching the trainer's env (action_masks). Only used when
+  // the manifest sets actionMasking (MaskablePPO); other models pass no mask.
+  function pilotActionMask(model) {
+    return model.actions.map(function (action) {
+      if (action === "fire") return fireCooldown <= 0;
+      return true;
+    });
+  }
+
+  function enemyActionMask(model, alien) {
+    var canFire = canAlienFire(alien);
+    var canDown = (alien.downCooldown || 0) <= 0 && (alien.y + alien.height) < canvas.height;
+    return model.actions.map(function (action) {
+      if (action.indexOf("fire") !== -1 && !canFire) return false;
+      if ((action === "down" || action === "down_fire") && !canDown) return false;
+      return true;
+    });
   }
 
   function modelFeatures(model, featureOverride) {
@@ -637,7 +695,8 @@
       var action = predictModelAction(
         enemyModel,
         "hold",
-        modelUsesGrid(enemyModel) ? fullGridFeatures(alien) : enemyFeatures(alien, wrap)
+        modelUsesGrid(enemyModel) ? fullGridFeatures(alien) : enemyFeatures(alien, wrap),
+        enemyModel.actionMasking ? enemyActionMask(enemyModel, alien) : null
       );
       applyEnemyShipAction(action, alien, summary);
     });

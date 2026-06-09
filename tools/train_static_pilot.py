@@ -1135,6 +1135,12 @@ class PilotTrainingEnv(gym.Env):
         truncated = done and not terminated
         return next_observation, pilot_reward, terminated, truncated, serializable_info(info)
 
+    def action_masks(self) -> np.ndarray:
+        # Legal-action mask for MaskablePPO; must match js/galagai.js
+        # pilotActionMask. Only firing is gated (by cooldown); moves are free.
+        mask = [(self.game.fire_cooldown <= 0) if action == "fire" else True for action in PILOT_ACTIONS]
+        return np.asarray(mask, dtype=bool)
+
 
 class EnemyTrainingEnv(gym.Env):
     metadata = {"render_modes": []}
@@ -1158,6 +1164,25 @@ class EnemyTrainingEnv(gym.Env):
         terminated = done and str(info.get("winner", "none")) in {"pilot", "enemies"}
         truncated = done and not terminated
         return self.game.enemy_control_observation(), enemy_reward, terminated, truncated, serializable_info(info)
+
+    def action_masks(self) -> np.ndarray:
+        # Legal-action mask for the controlled enemy; must match js/galagai.js
+        # enemyActionMask. Firing is gated to butterfly/boss + cooldown; the
+        # downward drop is gated by its cooldown and the floor.
+        alien = self.game.selected_enemy()
+        if alien is None:
+            return np.ones(len(ENEMY_ACTIONS), dtype=bool)
+        can_fire = self.game.can_enemy_fire(alien)
+        can_down = alien.down_cooldown <= 0.0 and alien.bottom < CANVAS_HEIGHT
+        mask = []
+        for action in ENEMY_ACTIONS:
+            if "fire" in action and not can_fire:
+                mask.append(False)
+            elif action in {"down", "down_fire"} and not can_down:
+                mask.append(False)
+            else:
+                mask.append(True)
+        return np.asarray(mask, dtype=bool)
 
 
 def serializable_info(info: dict[str, object]) -> dict[str, object]:
@@ -1187,10 +1212,19 @@ def serializable_info(info: dict[str, object]) -> dict[str, object]:
 def make_role_env(role: str, opponent_spec: PolicySpec, seed: int, max_steps: int, max_start_wave: int = 1) -> gym.Env:
     opponent = policy_from_spec(opponent_spec)
     if role == "pilot":
-        return Monitor(PilotTrainingEnv(opponent, seed=seed, max_steps=max_steps, max_start_wave=max_start_wave))
-    if role == "enemies":
-        return Monitor(EnemyTrainingEnv(opponent, seed=seed, max_steps=max_steps, max_start_wave=max_start_wave))
-    raise ValueError(f"Unknown training role {role}.")
+        env: gym.Env = PilotTrainingEnv(opponent, seed=seed, max_steps=max_steps, max_start_wave=max_start_wave)
+    elif role == "enemies":
+        env = EnemyTrainingEnv(opponent, seed=seed, max_steps=max_steps, max_start_wave=max_start_wave)
+    else:
+        raise ValueError(f"Unknown training role {role}.")
+    env = Monitor(env)
+    if selected_spec().action_masking:
+        # MaskablePPO reads action_masks() off the (outermost) env via the vec
+        # env; ActionMasker exposes it, reading the base env through .unwrapped.
+        from sb3_contrib.common.wrappers import ActionMasker
+
+        env = ActionMasker(env, lambda wrapped: wrapped.unwrapped.action_masks())
+    return env
 
 
 def make_training_env(
@@ -2298,6 +2332,7 @@ def checkpoint_entry(role: str, model: DQN, version_id: int, metrics: dict[str, 
         for key, value in metrics.items()
         if isinstance(value, (int, float, str, bool))
     }
+    spec = selected_spec()
     return {
         "id": version_id,
         "label": label,
@@ -2309,6 +2344,10 @@ def checkpoint_entry(role: str, model: DQN, version_id: int, metrics: dict[str, 
         "frameShape": list(FRAME_SHAPE),
         "gridChannels": GRID_CHANNELS,
         "scalarFeatures": SCALAR_FEATURES,
+        # How the browser folds the network output (quantiles) and whether to
+        # apply a legal-action mask before argmax (MaskablePPO).
+        "outputHead": spec.output_head,
+        "actionMasking": spec.action_masking,
         "network": export_network(model),
         **metric_fields,
     }
