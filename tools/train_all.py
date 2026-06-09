@@ -61,9 +61,10 @@ def publish_command(
     *,
     target_rounds: int,
     shared_args: list[str],
+    publish_interval: float | None = None,
     python: str = sys.executable,
 ) -> list[str]:
-    return [
+    command = [
         python,
         "tools/train_publish.py",
         "--algorithm",
@@ -74,12 +75,17 @@ def publish_command(
         str(brain_output(algorithm)),
         "--target-rounds",
         str(target_rounds),
-        "--no-push",
-        "--no-pages",
-        "--no-commit",
         "--skip-tests",
-        *shared_args,
     ]
+    if publish_interval:
+        # Let train_publish commit/push/mirror this technique's progress on a
+        # timer (the same periodic-push you used for single runs). The brain
+        # index is still (re)assembled + deployed by train_all at the end.
+        command += ["--publish-interval-seconds", str(publish_interval)]
+    else:
+        command += ["--no-push", "--no-pages", "--no-commit"]
+    command += shared_args
+    return command
 
 
 def assemble_brains_index(main_manifest_path: Path, algorithms: list[str]) -> dict[str, object]:
@@ -168,6 +174,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-episodes", type=int, default=None)
     parser.add_argument("--max-phase-iterations", type=int, default=None)
     parser.add_argument("--min-balanced-rounds", type=int, default=None)
+    parser.add_argument(
+        "--publish-interval-seconds",
+        type=float,
+        default=None,
+        help="Periodically commit/push/mirror each technique's progress on a timer "
+        "(e.g. 600), instead of only deploying once at the end.",
+    )
     parser.add_argument("--no-resume", action="store_true", help="Start each technique's checkpoint dir fresh.")
     parser.add_argument("--assemble-only", action="store_true", help="Skip training; just (re)write the brains index.")
     parser.add_argument("--deploy", action="store_true", help="After assembling, commit + push master and mirror gh-pages.")
@@ -198,7 +211,12 @@ def main() -> None:
     if not args.assemble_only:
         BRAINS_DIR.mkdir(parents=True, exist_ok=True)
         for algorithm in args.techniques:
-            command = publish_command(algorithm, target_rounds=args.target_rounds, shared_args=shared_args)
+            command = publish_command(
+                algorithm,
+                target_rounds=args.target_rounds,
+                shared_args=shared_args,
+                publish_interval=args.publish_interval_seconds,
+            )
             print(f"\n=== training {algorithm} -> {brain_output(algorithm)} ===", flush=True)
             print("+ " + " ".join(command), flush=True)
             subprocess.run(command, cwd=ROOT, check=True)
