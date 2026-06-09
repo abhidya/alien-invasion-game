@@ -36,11 +36,13 @@ DEFAULT_TECHNIQUES = ["dqn", "qrdqn", "ppo", "a2c", "maskable-ppo"]
 
 
 def brain_output(algorithm: str) -> Path:
-    """Manifest path for an algorithm: the main manifest for DQN, else js/brains/<id>.json."""
+    """Manifest path for an algorithm: the main manifest for DQN, else
+    js/brains/<technique>/model.json. Each non-default brain gets its own
+    directory so their per-version checkpoint files never collide."""
     if algorithm == rl_algorithms.DEFAULT_ALGORITHM:
         return MAIN_MANIFEST
     technique = rl_algorithms.get_algorithm(algorithm).technique
-    return BRAINS_DIR / f"{technique}.json"
+    return BRAINS_DIR / technique / "model.json"
 
 
 def checkpoint_dir(algorithm: str) -> Path:
@@ -66,7 +68,7 @@ def publish_command(
         algorithm,
         "--checkpoint-dir",
         str(checkpoint_dir(algorithm)),
-        "--out",
+        "--model",
         str(brain_output(algorithm)),
         "--target-rounds",
         str(target_rounds),
