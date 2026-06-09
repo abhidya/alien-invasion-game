@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,6 +106,53 @@ def assemble_brains_index(main_manifest_path: Path, algorithms: list[str]) -> di
     return brains
 
 
+# Static files mirrored to gh-pages (matches tools/train_publish.py).
+STATIC_PAGE_PATHS = ["index.html", "style.css", "js", "game_spec.json", "alien_invasion/DQN.py", "alien_invasion/images"]
+
+
+def _git(args: list[str], *, cwd: Path = ROOT, check: bool = True) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=check)
+
+
+def deploy_artifacts(techniques: list[str]) -> None:
+    """Commit + push the trained brains to master, then mirror to gh-pages."""
+    _git(["add", "js", "game_spec.json"])
+    _git(["commit", "-m", f"Publish v16 grid brains: {', '.join(techniques)}"], check=False)
+    for attempt in range(4):
+        try:
+            _git(["push", "origin", "master"])
+            break
+        except subprocess.CalledProcessError:
+            if attempt == 3:
+                raise
+
+    _git(["fetch", "origin", "gh-pages"], check=False)
+    worktree = Path(tempfile.mkdtemp(prefix="galagai-ghpages."))
+    try:
+        _git(["worktree", "add", str(worktree), "origin/gh-pages"])
+        for relative in STATIC_PAGE_PATHS:
+            source = ROOT / relative
+            destination = worktree / relative
+            if not source.exists():
+                continue
+            if destination.exists():
+                shutil.rmtree(destination) if destination.is_dir() else destination.unlink()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, destination) if source.is_dir() else shutil.copy2(source, destination)
+        _git(["add", "-A"], cwd=worktree)
+        _git(["commit", "-m", "Publish v16 grid demo (brains + per-side selector)"], cwd=worktree, check=False)
+        for attempt in range(4):
+            try:
+                _git(["push", "origin", "HEAD:gh-pages"], cwd=worktree)
+                break
+            except subprocess.CalledProcessError:
+                if attempt == 3:
+                    raise
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=ROOT, check=False)
+        shutil.rmtree(worktree, ignore_errors=True)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train all RL families and assemble the brain index.")
     parser.add_argument("--techniques", nargs="+", default=DEFAULT_TECHNIQUES, choices=rl_algorithms.algorithm_keys())
@@ -121,6 +170,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-balanced-rounds", type=int, default=None)
     parser.add_argument("--no-resume", action="store_true", help="Start each technique's checkpoint dir fresh.")
     parser.add_argument("--assemble-only", action="store_true", help="Skip training; just (re)write the brains index.")
+    parser.add_argument("--deploy", action="store_true", help="After assembling, commit + push master and mirror gh-pages.")
     return parser.parse_args()
 
 
@@ -155,12 +205,13 @@ def main() -> None:
 
     index = assemble_brains_index(MAIN_MANIFEST, args.techniques)
     print(json.dumps({"brainsIndex": index}, indent=2), flush=True)
-    print(
-        "\nDone. Review js/galagai-model.json + js/brains/, then publish with:\n"
-        "  python tools/train_publish.py --skip-tests --no-resume --assemble-only  # (or your normal push)\n"
-        "or push master + gh-pages however you deploy.",
-        flush=True,
-    )
+
+    if args.deploy:
+        print("\n=== deploying: master + gh-pages ===", flush=True)
+        deploy_artifacts(args.techniques)
+        print("Deployed. Live demo: https://abhidya.github.io/alien-invasion-game/#architectures", flush=True)
+    else:
+        print("\nDone (local). Re-run with --deploy to push master + mirror gh-pages.", flush=True)
 
 
 if __name__ == "__main__":
