@@ -55,6 +55,14 @@
   var enemyVersions = [];
   var activePilotVersion = 0;
   var activeEnemyVersion = 0;
+  // Per-side "brain" (technique) state. The pilot and the enemy can each run a
+  // different exported technique at once (e.g. PPO pilot vs DQN enemy). The main
+  // manifest is the default brain; manifest.brains maps other technique ids to
+  // their own manifest URLs, loaded lazily on selection.
+  var brainManifestObjects = {};
+  var brainManifestUrls = {};
+  var pilotBrainId = null;
+  var enemyBrainId = null;
   var modelManifestUrl = "js/galagai-model.json";
   var modelCache = {};
   var pilotLoadTicket = 0;
@@ -97,8 +105,9 @@
     var base = mapAlgorithmToTechnique(model.algorithm);
     window.GalagAIRuntime = {
       algorithm: model.algorithm || null,
-      pilotTechniqueId: (model.pilot && model.pilot.technique) || base,
-      enemyTechniqueId: (model.enemies && model.enemies.technique) || base
+      // Reflect the brain actually driving each side (may differ once mixed).
+      pilotTechniqueId: pilotBrainId || (model.pilot && model.pilot.technique) || base,
+      enemyTechniqueId: enemyBrainId || (model.enemies && model.enemies.technique) || base
     };
     try {
       window.dispatchEvent(new CustomEvent("galagai:runtime", { detail: window.GalagAIRuntime }));
@@ -106,6 +115,75 @@
       /* CustomEvent unsupported -- selector keeps its defaults. */
     }
   }
+
+  // Register the techniques that have exported artifacts. The default technique
+  // (this manifest) is always available; manifest.brains adds the rest by URL.
+  function registerBrains(model) {
+    var base = (model.pilot && model.pilot.technique) || mapAlgorithmToTechnique(model.algorithm);
+    brainManifestObjects = {};
+    brainManifestUrls = {};
+    brainManifestObjects[base] = model;
+    pilotBrainId = base;
+    enemyBrainId = (model.enemies && model.enemies.technique) || base;
+    if (model.brains && typeof model.brains === "object") {
+      Object.keys(model.brains).forEach(function (tech) {
+        var entry = model.brains[tech];
+        var url = typeof entry === "string" ? entry : (entry && entry.manifest);
+        if (url && !brainManifestObjects[tech]) brainManifestUrls[tech] = url;
+      });
+    }
+  }
+
+  function availableBrains() {
+    var ids = {};
+    Object.keys(brainManifestObjects).forEach(function (k) { ids[k] = true; });
+    Object.keys(brainManifestUrls).forEach(function (k) { ids[k] = true; });
+    return Object.keys(ids);
+  }
+
+  function loadBrainManifest(technique) {
+    if (brainManifestObjects[technique]) return Promise.resolve(brainManifestObjects[technique]);
+    var url = brainManifestUrls[technique];
+    if (!url) return Promise.reject(new Error("brain not exported: " + technique));
+    var absolute = new URL(url, new URL(modelManifestUrl, window.location.href)).toString();
+    return fetch(absolute)
+      .then(function (response) {
+        if (!response.ok) throw new Error("brain manifest unavailable");
+        return response.json();
+      })
+      .then(function (manifest) {
+        brainManifestObjects[technique] = manifest;
+        return manifest;
+      });
+  }
+
+  // Swap the technique driving one side. Pilot and enemy are independent, so
+  // selecting a pilot brain never disturbs the enemy and vice-versa.
+  function setBrain(side, technique) {
+    return loadBrainManifest(technique).then(function (manifest) {
+      if (side === "pilot") {
+        pilotVersions = extractPilotVersions(manifest);
+        activePilotVersion = Math.max(0, pilotVersions.length - 1);
+        pilotBrainId = technique;
+        configureVersionSlider(versionNodes.pilotSlider, pilotVersions, activePilotVersion);
+        loadSelectedVersion("pilot");
+      } else {
+        enemyVersions = extractEnemyVersions(manifest);
+        activeEnemyVersion = Math.max(0, enemyVersions.length - 1);
+        enemyBrainId = technique;
+        updateEnemyModelForMode();
+      }
+      publishRuntime(manifest);
+      updateHud();
+      return technique;
+    });
+  }
+
+  window.GalagAI = {
+    setBrain: setBrain,
+    availableBrains: availableBrains,
+    currentBrain: function (side) { return side === "pilot" ? pilotBrainId : enemyBrainId; }
+  };
 
   function loadPilotModel() {
     fetch(modelManifestUrl)
@@ -115,6 +193,7 @@
       })
       .then(function (model) {
         if (!isUsableManifest(model)) return;
+        registerBrains(model);
         pilotVersions = extractPilotVersions(model);
         enemyVersions = extractEnemyVersions(model);
         activePilotVersion = Math.max(0, pilotVersions.length - 1);

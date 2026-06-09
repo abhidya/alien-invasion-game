@@ -35,9 +35,21 @@
     // Which technique is live per side. Defaults to dqn (the only exported
     // family today); galagai.js refines this from the manifest's algorithm.
     function liveId(side) {
+      // Prefer the brain galagai.js is actually running for this side (per-side
+      // mixing), then the manifest runtime, then a sensible default.
+      var ga = window.GalagAI;
+      if (ga && ga.currentBrain) {
+        var cur = ga.currentBrain(side);
+        if (cur && byId[cur]) return cur;
+      }
       var rt = window.GalagAIRuntime || {};
       var id = side === "pilot" ? rt.pilotTechniqueId : rt.enemyTechniqueId;
       return byId[id] ? id : (byId.dqn ? "dqn" : designs[0].id);
+    }
+
+    function brainAvailable(id) {
+      var ga = window.GalagAI;
+      return Boolean(ga && ga.availableBrains && ga.availableBrains().indexOf(id) >= 0);
     }
 
     var selection = { pilot: liveId("pilot"), enemy: liveId("enemy") };
@@ -66,8 +78,17 @@
       });
       select.value = selection[side];
       select.addEventListener("change", function () {
-        selection[side] = select.value;
-        renderExplainer(side, select.value);
+        var tech = select.value;
+        selection[side] = tech;
+        var ga = window.GalagAI;
+        if (ga && ga.setBrain && brainAvailable(tech)) {
+          // Swap the live brain for this side, then refresh the explainer.
+          ga.setBrain(side, tech)
+            .then(function () { renderExplainer(side, tech); })
+            .catch(function () { renderExplainer(side, tech); });
+        } else {
+          renderExplainer(side, tech);
+        }
       });
       wrap.appendChild(select);
       return wrap;
@@ -99,8 +120,10 @@
 
       var word = statusWord(id, side);
       var notice = el("p", "brain-notice brain-notice-" + word);
-      if (word === "live") {
+      if (id === liveId(side)) {
         notice.textContent = "Live: exported weights are driving the " + side + " right now.";
+      } else if (brainAvailable(id)) {
+        notice.textContent = "Exported — select it to load this technique for the " + side + ".";
       } else {
         var live = byId[liveId(side)];
         notice.textContent =
