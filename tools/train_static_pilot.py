@@ -2609,6 +2609,19 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
             "selfPlay": self_play_metrics,
         },
     }
+    # Preserve any existing brain-selector index. tools/train_all.py writes a
+    # `brains` map into this manifest pointing at the other trained techniques;
+    # a routine re-publish of one technique must not clobber the others, or the
+    # frontend reverts to "Not exported yet" for every non-default brain.
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+        existing_brains = existing.get("brains")
+        if isinstance(existing_brains, dict) and existing_brains:
+            payload["brains"] = existing_brains
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
 
