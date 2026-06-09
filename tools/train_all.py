@@ -184,6 +184,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-resume", action="store_true", help="Start each technique's checkpoint dir fresh.")
     parser.add_argument("--assemble-only", action="store_true", help="Skip training; just (re)write the brains index.")
     parser.add_argument("--deploy", action="store_true", help="After assembling, commit + push master and mirror gh-pages.")
+    parser.add_argument(
+        "--deploy-after-each",
+        action="store_true",
+        help="Assemble + deploy after EACH technique finishes, so it becomes selectable "
+        "on the live site immediately rather than waiting for the whole matrix.",
+    )
     return parser.parse_args()
 
 
@@ -220,14 +226,24 @@ def main() -> None:
             print(f"\n=== training {algorithm} -> {brain_output(algorithm)} ===", flush=True)
             print("+ " + " ".join(command), flush=True)
             subprocess.run(command, cwd=ROOT, check=True)
+            if args.deploy_after_each:
+                # Reassemble with the techniques finished so far and deploy now, so
+                # this one is selectable on the live site immediately.
+                index = assemble_brains_index(MAIN_MANIFEST, args.techniques)
+                print(json.dumps({"brainsIndex": index}, indent=2), flush=True)
+                print(f"=== deploying after {algorithm}: master + gh-pages ===", flush=True)
+                deploy_artifacts(args.techniques)
 
     index = assemble_brains_index(MAIN_MANIFEST, args.techniques)
     print(json.dumps({"brainsIndex": index}, indent=2), flush=True)
 
-    if args.deploy:
+    if args.deploy and not args.deploy_after_each:
         print("\n=== deploying: master + gh-pages ===", flush=True)
         deploy_artifacts(args.techniques)
         print("Deployed. Live demo: https://abhidya.github.io/alien-invasion-game/#architectures", flush=True)
+    elif args.deploy_after_each:
+        print("\nDeployed after each technique. Live demo: "
+              "https://abhidya.github.io/alien-invasion-game/#architectures", flush=True)
     else:
         print("\nDone (local). Re-run with --deploy to push master + mirror gh-pages.", flush=True)
 
