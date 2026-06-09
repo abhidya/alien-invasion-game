@@ -16,6 +16,10 @@ from typing import Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from tools import rl_algorithms  # noqa: E402  (dependency-free registry)
+
 EXPECTED_MODEL_SCHEMA_VERSION = 16
 DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v16")
 DEFAULT_MODEL = Path("js/galagai-model.json")
@@ -196,6 +200,8 @@ def build_train_command(
         str(args.keep_latest_versions),
         "--replay-buffer-size",
         str(args.replay_buffer_size),
+        "--algorithm",
+        args.algorithm,
         "--out",
         str(args.model),
     ]
@@ -554,6 +560,13 @@ def parse_args() -> argparse.Namespace:
         default=50_000,
         help="Off-policy replay buffer capacity. Lower it (e.g. 10000) when the observation "
         "is a large board grid to keep replay pickles from filling the disk.",
+    )
+    parser.add_argument(
+        "--algorithm",
+        choices=rl_algorithms.algorithm_keys(),
+        default=rl_algorithms.DEFAULT_ALGORITHM,
+        help="RL family to train and export (dqn, qrdqn, ppo, a2c, maskable-ppo). "
+        "Pair each non-default algorithm with its own --checkpoint-dir and --out.",
     )
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--no-progress", action="store_true")

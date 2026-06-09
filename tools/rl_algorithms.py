@@ -39,6 +39,7 @@ class AlgorithmSpec:
     output_head: str
     browser_runtime: str
     manifest_algorithm: str
+    technique: str
     action_masking: bool = False
     off_policy: bool = True
     extra_kwargs: dict[str, object] = field(default_factory=dict)
@@ -58,6 +59,7 @@ ALGORITHMS: dict[str, AlgorithmSpec] = {
         output_head="q-values",
         browser_runtime="js-mlp",
         manifest_algorithm="stable-baselines3-dqn",
+        technique="dqn",
         off_policy=True,
     ),
     "qrdqn": AlgorithmSpec(
@@ -71,6 +73,7 @@ ALGORITHMS: dict[str, AlgorithmSpec] = {
         output_head="quantiles",
         browser_runtime="js-mlp",
         manifest_algorithm="sb3-contrib-qrdqn",
+        technique="qr-dqn",
         off_policy=True,
     ),
     "ppo": AlgorithmSpec(
@@ -84,6 +87,7 @@ ALGORITHMS: dict[str, AlgorithmSpec] = {
         output_head="logits",
         browser_runtime="js-mlp",
         manifest_algorithm="stable-baselines3-ppo",
+        technique="ppo",
         off_policy=False,
     ),
     "a2c": AlgorithmSpec(
@@ -97,6 +101,7 @@ ALGORITHMS: dict[str, AlgorithmSpec] = {
         output_head="logits",
         browser_runtime="js-mlp",
         manifest_algorithm="stable-baselines3-a2c",
+        technique="a2c",
         off_policy=False,
     ),
     "maskable-ppo": AlgorithmSpec(
@@ -110,6 +115,7 @@ ALGORITHMS: dict[str, AlgorithmSpec] = {
         output_head="logits",
         browser_runtime="js-mlp",
         manifest_algorithm="sb3-contrib-maskable-ppo",
+        technique="maskable-ppo",
         action_masking=True,
         off_policy=False,
     ),

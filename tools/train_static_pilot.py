@@ -32,6 +32,8 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from tqdm.auto import tqdm
 
+from tools import rl_algorithms
+
 
 PILOT_ACTIONS = ["left", "right", "fire", "stay", "up", "down"]
 ENEMY_ACTIONS = [
@@ -1241,6 +1243,28 @@ def replay_buffer_size() -> int:
         return 50_000
 
 
+def selected_algorithm_key() -> str:
+    """Algorithm chosen for this run; read from the env so spawned candidate
+    workers (ProcessPoolExecutor, spawn) inherit the same selection."""
+    return os.environ.get("GALAGAI_ALGORITHM", rl_algorithms.DEFAULT_ALGORITHM)
+
+
+def selected_spec() -> "rl_algorithms.AlgorithmSpec":
+    return rl_algorithms.get_algorithm(selected_algorithm_key())
+
+
+def _import_agent_class(spec: "rl_algorithms.AlgorithmSpec"):
+    import importlib
+
+    module = importlib.import_module(spec.sb3_module)
+    return getattr(module, spec.sb3_class)
+
+
+def agent_uses_replay() -> bool:
+    """Only off-policy algorithms keep a replay buffer worth persisting."""
+    return selected_spec().off_policy
+
+
 def make_dqn(env: Any, seed: int, learning_rate: float) -> DQN:
     return DQN(
         "MlpPolicy",
@@ -1260,6 +1284,53 @@ def make_dqn(env: Any, seed: int, learning_rate: float) -> DQN:
         seed=seed,
         verbose=0,
     )
+
+
+def build_agent(env: Any, seed: int, learning_rate: float):
+    """Construct the SB3 agent for the selected algorithm.
+
+    DQN returns exactly make_dqn (byte-identical to the legacy path). Other
+    families are constructed from the registry: off-policy value methods reuse
+    the DQN-style replay hyperparameters; on-policy actor-critics drop the
+    buffer entirely (which also sidesteps the replay-pickle disk blowup).
+    """
+    spec = selected_spec()
+    if spec.key == rl_algorithms.DEFAULT_ALGORITHM:
+        return make_dqn(env, seed=seed, learning_rate=learning_rate)
+
+    agent_cls = _import_agent_class(spec)
+    policy_kwargs = {"net_arch": DQN_NET_ARCH}
+    if spec.off_policy:
+        return agent_cls(
+            "MlpPolicy",
+            env,
+            learning_rate=learning_rate,
+            buffer_size=replay_buffer_size(),
+            learning_starts=250,
+            batch_size=64,
+            gamma=0.97,
+            train_freq=4,
+            gradient_steps=1,
+            target_update_interval=500,
+            policy_kwargs=policy_kwargs,
+            seed=seed,
+            verbose=0,
+        )
+    return agent_cls(
+        "MlpPolicy",
+        env,
+        learning_rate=learning_rate,
+        gamma=0.97,
+        n_steps=256,
+        policy_kwargs=policy_kwargs,
+        seed=seed,
+        verbose=0,
+    )
+
+
+def load_agent(path: str | Path):
+    """Load a saved agent of the selected algorithm's class."""
+    return _import_agent_class(selected_spec()).load(str(path))
 
 
 def train_role_model(
@@ -1283,7 +1354,7 @@ def train_role_model(
     )
     try:
         if model is None:
-            model = make_dqn(env, seed=seed, learning_rate=8e-4)
+            model = build_agent(env, seed=seed, learning_rate=8e-4)
         else:
             model.set_env(env)
             set_random_seed = getattr(model, "set_random_seed", None)
@@ -1317,8 +1388,8 @@ def train_candidate_from_files(args: tuple[object, ...]) -> CandidateResult:
     output_path = Path(str(output_dir))
     base_model = None
     if base_model_path is not None:
-        base_model = DQN.load(str(base_model_path))
-        if base_replay_path is not None and Path(str(base_replay_path)).exists():
+        base_model = load_agent(str(base_model_path))
+        if agent_uses_replay() and base_replay_path is not None and Path(str(base_replay_path)).exists():
             base_model.load_replay_buffer(str(base_replay_path))
 
     trained_model = train_role_model(
@@ -1358,14 +1429,17 @@ def train_candidate_from_files(args: tuple[object, ...]) -> CandidateResult:
         )
 
     model_path = output_path / f"{role}-candidate-{spawn_index}.zip"
-    replay_path = output_path / f"{role}-candidate-{spawn_index}-replay.pkl"
     trained_model.save(model_path)
-    trained_model.save_replay_buffer(replay_path)
+    replay_path = ""
+    if agent_uses_replay():
+        replay_file = output_path / f"{role}-candidate-{spawn_index}-replay.pkl"
+        trained_model.save_replay_buffer(replay_file)
+        replay_path = str(replay_file)
     return CandidateResult(
         spawn_index=spawn_index,
         metrics=metrics,
         model_path=str(model_path),
-        replay_path=str(replay_path),
+        replay_path=replay_path,
     )
 
 
@@ -1374,17 +1448,20 @@ def save_candidate_base_model(model: DQN | None, directory: Path, role: str) -> 
         return None, None
     directory.mkdir(parents=True, exist_ok=True)
     model_path = directory / f"{role}-base.zip"
-    replay_path = directory / f"{role}-base-replay.pkl"
     model.save(model_path)
+    if not agent_uses_replay():
+        return str(model_path), None
+    replay_path = directory / f"{role}-base-replay.pkl"
     model.save_replay_buffer(replay_path)
     return str(model_path), str(replay_path)
 
 
 def load_candidate_model(result: CandidateResult) -> DQN:
-    model = DQN.load(result.model_path)
-    replay_path = Path(result.replay_path)
-    if replay_path.exists():
-        model.load_replay_buffer(replay_path)
+    model = load_agent(result.model_path)
+    if agent_uses_replay() and result.replay_path:
+        replay_path = Path(result.replay_path)
+        if replay_path.exists():
+            model.load_replay_buffer(replay_path)
     return model
 
 
@@ -1686,7 +1763,7 @@ class TrainingCheckpointStore:
 
         state = {
             "schemaVersion": MODEL_SCHEMA_VERSION,
-            "algorithm": "stable-baselines3-dqn",
+            "algorithm": selected_spec().manifest_algorithm,
             "actions": {"pilot": PILOT_ACTIONS, "enemies": ENEMY_ACTIONS},
             "features": FEATURES,
             "netArch": DQN_NET_ARCH,
@@ -1735,15 +1812,16 @@ class TrainingCheckpointStore:
         model_path = self.directory / f"{role}_latest.zip"
         if not model_path.exists():
             raise RuntimeError(f"{role} model checkpoint is missing: {model_path}")
-        model = DQN.load(model_path)
+        model = load_agent(model_path)
         replay_path = self.directory / f"{role}_replay.pkl"
-        if replay_path.exists():
+        if agent_uses_replay() and replay_path.exists():
             model.load_replay_buffer(replay_path)
         return model
 
     def _save_role_model(self, role: str, model: DQN) -> None:
         self._save_model_atomic(model, self.directory / f"{role}_latest.zip")
-        self._save_replay_buffer_atomic(model, self.directory / f"{role}_replay.pkl")
+        if agent_uses_replay():
+            self._save_replay_buffer_atomic(model, self.directory / f"{role}_replay.pkl")
 
     @staticmethod
     def _save_model_atomic(model: DQN, path: Path) -> None:
@@ -2347,17 +2425,25 @@ def summarize_episode_results(results: list[EpisodeResult], episodes: int) -> di
 
 
 def export_network(model: DQN) -> dict[str, object]:
+    # Collect the Linear layers of the selected algorithm's acting network, in
+    # order. DQN exposes a single q_net (identical to the legacy export);
+    # actor-critic methods concatenate mlp_extractor.policy_net + action_net.
+    spec = selected_spec()
     layers = []
-    for module in model.policy.q_net.modules():
-        if isinstance(module, nn.Linear):
-            weights = module.weight.detach().cpu().numpy().T
-            biases = module.bias.detach().cpu().numpy()
-            layers.append(
-                {
-                    "weights": [[round(float(value), 6) for value in row] for row in weights.tolist()],
-                    "biases": [round(float(value), 6) for value in biases.tolist()],
-                }
-            )
+    for attr_path in spec.export_modules:
+        submodule = model.policy
+        for part in attr_path.split("."):
+            submodule = getattr(submodule, part)
+        for module in submodule.modules():
+            if isinstance(module, nn.Linear):
+                weights = module.weight.detach().cpu().numpy().T
+                biases = module.bias.detach().cpu().numpy()
+                layers.append(
+                    {
+                        "weights": [[round(float(value), 6) for value in row] for row in weights.tolist()],
+                        "biases": [round(float(value), 6) for value in biases.tolist()],
+                    }
+                )
     return {"activation": "relu", "layers": layers}
 
 
@@ -2397,11 +2483,14 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
         (model_dir / filename).write_text(json.dumps(entry, separators=(",", ":")) + "\n", encoding="utf-8")
         enemy_manifest_versions.append(manifest_checkpoint(entry, f"{MODEL_FILE_DIR}/{filename}"))
 
-    technique = technique_for_algorithm(RL_ALGORITHM)
+    spec = selected_spec()
+    technique = spec.technique
     payload = {
         "model": "sb3-dqn-pilot",
         "version": MODEL_SCHEMA_VERSION,
-        "algorithm": RL_ALGORITHM,
+        "algorithm": spec.manifest_algorithm,
+        "outputHead": spec.output_head,
+        "actionMasking": spec.action_masking,
         # Brain-selector technique ids; the frontend marks these as the live
         # techniques (js/model-lab.js). Per-side so a future exporter can train
         # the pilot and the enemy with different families.
@@ -2422,6 +2511,8 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
         "enemies": {
             "model": "sb3-dqn-enemies",
             "technique": technique,
+            "outputHead": spec.output_head,
+            "actionMasking": spec.action_masking,
             "actions": ENEMY_ACTIONS,
             "features": FEATURES,
             "featureEncoding": FEATURE_ENCODING,
@@ -2436,7 +2527,7 @@ def write_model(path: Path, pilot_model: DQN, enemy_model: DQN, self_play: dict[
             },
         },
         "metrics": {
-            "rlAlgorithm": "stable-baselines3-dqn",
+            "rlAlgorithm": spec.manifest_algorithm,
             "evalAccuracy": float(latest["pilotWinRate"]),
             "enemyWinRate": float(latest["enemyWinRate"]),
             "enemyDropRate": float(latest["enemyDropRate"]),
@@ -2530,9 +2621,17 @@ def main() -> None:
         help="Off-policy replay buffer capacity. Lower it for large board-grid observations "
         "so replay pickles do not exhaust the disk.",
     )
+    parser.add_argument(
+        "--algorithm",
+        choices=rl_algorithms.algorithm_keys(),
+        default=selected_algorithm_key(),
+        help="RL family to train and export. Default dqn keeps the legacy path; "
+        "on-policy choices (ppo/a2c/maskable-ppo) skip the replay buffer entirely.",
+    )
     args = parser.parse_args()
-    # Propagate via env so spawned candidate workers (ProcessPoolExecutor) inherit it.
+    # Propagate via env so spawned candidate workers (ProcessPoolExecutor) inherit them.
     os.environ["GALAGAI_REPLAY_BUFFER_SIZE"] = str(max(1_000, int(args.replay_buffer_size)))
+    os.environ["GALAGAI_ALGORITHM"] = args.algorithm
     retention = CheckpointRetention(mode=args.checkpoint_retention, keep_latest=args.keep_latest_versions)
 
     pilot_model, enemy_model, self_play = train_self_play(
