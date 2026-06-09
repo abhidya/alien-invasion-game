@@ -173,6 +173,43 @@
       ]
     },
     {
+      id: "a2c",
+      name: "Advantage Actor-Critic",
+      family: "Policy-gradient / actor-critic",
+      status: "trainable",
+      accent: "#ff4fc3",
+      tagline: "PPO's simpler synchronous cousin. Same stochastic actor and identical plain-MLP export, lighter to run.",
+      facts: [
+        { label: "Library", value: "stable-baselines3 (core)" },
+        { label: "Action space", value: "Discrete" },
+        { label: "Browser runtime", value: "Hand-rolled JS" },
+        { label: "Export", value: "Actor MLP → logits" }
+      ],
+      sections: [
+        {
+          h: "Design",
+          p: [
+            "A2C is the synchronous, deterministic form of actor-critic: it estimates an advantage and nudges a stochastic policy toward better-than-average actions. It shares PPO's on-policy footing — no replay buffer, so no stale experience from obsolete self-play opponents and no replay-pickle disk cost.",
+            "It omits PPO's clipped trust region, so it is simpler and faster per step but a touch less stable; a reasonable lightweight fallback when PPO's robustness is not required."
+          ],
+          ul: [
+            "Identical export to PPO: the actor is a plain state→logits MLP.",
+            "On-policy and reproducible; pairs well with the unified self-play loop."
+          ]
+        },
+        {
+          h: "Implementation",
+          p: [
+            "Train with SB3 A2C + MlpPolicy. Export only the actor (mlp_extractor.policy_net + action_net) and argmax in JS — the same path PPO uses, so the browser runtime is unchanged."
+          ]
+        }
+      ],
+      sources: [
+        { label: "A2C / A3C overview", url: "https://apxml.com/courses/advanced-reinforcement-learning/chapter-3-advanced-policy-gradients-actor-critic/a2c-a3c" },
+        { label: "DQN vs PPO vs A2C study", url: "https://arxiv.org/html/2407.14151v1" }
+      ]
+    },
+    {
       id: "maskable-ppo",
       name: "MaskablePPO",
       family: "Policy-gradient (action-masked)",
@@ -348,6 +385,22 @@
       caveats: [
         "Observation preprocessing is NOT bundled in the export — mirror it in JS.",
         "No PPO artifact published yet."
+      ]
+    },
+    a2c: {
+      pros: [
+        "Simpler and faster per step than PPO; deterministic and reproducible.",
+        "On-policy — no replay buffer, so no stale experience and no replay-pickle disk cost.",
+        "Identical plain-MLP actor export to PPO; browser runtime unchanged."
+      ],
+      cons: [
+        "No clipped trust region, so updates are a touch less stable than PPO.",
+        "Less sample-efficient than replay-based value methods.",
+        "Critic is wasted compute at deploy time."
+      ],
+      caveats: [
+        "Mirror SB3 observation preprocessing in JS, same as PPO.",
+        "No A2C artifact published yet."
       ]
     },
     "maskable-ppo": {

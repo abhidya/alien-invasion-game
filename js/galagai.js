@@ -141,6 +141,23 @@
     return Object.keys(ids);
   }
 
+  // A brain manifest's checkpoint files are stored next to that manifest, but
+  // hydrateVersion resolves version urls against the main manifest. Rewrite a
+  // loaded brain's version urls to absolute (against the brain's own location)
+  // so checkpoints load from the brain's directory, not the main one.
+  function absolutizeBrainVersions(manifest, brainBaseUrl) {
+    function fix(entry) {
+      if (entry && entry.url) entry.url = new URL(entry.url, brainBaseUrl).toString();
+      if (entry && entry.networkRef) entry.networkRef = new URL(entry.networkRef, brainBaseUrl).toString();
+      return entry;
+    }
+    var versions = manifest.versions || {};
+    (versions.pilot || []).forEach(fix);
+    (versions.enemies || []).forEach(fix);
+    if (manifest.enemies) fix(manifest.enemies);
+    return manifest;
+  }
+
   function loadBrainManifest(technique) {
     if (brainManifestObjects[technique]) return Promise.resolve(brainManifestObjects[technique]);
     var url = brainManifestUrls[technique];
@@ -152,6 +169,7 @@
         return response.json();
       })
       .then(function (manifest) {
+        absolutizeBrainVersions(manifest, absolute);
         brainManifestObjects[technique] = manifest;
         return manifest;
       });
