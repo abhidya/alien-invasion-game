@@ -481,9 +481,11 @@ class SB3Policy:
 class NetworkPolicy:
     """Run an exported Q-network without keeping a live SB3 model in a worker."""
 
-    def __init__(self, network: dict[str, object]):
+    def __init__(self, network: dict[str, object], output_head: str = "q-values", num_actions: int | None = None):
         self.activation = str(network.get("activation", "relu"))
         self.layers = list(network.get("layers", []))
+        self.output_head = output_head
+        self.num_actions = num_actions
 
     def act(self, observation: np.ndarray) -> int:
         values = np.asarray(observation, dtype=np.float32)
@@ -493,19 +495,41 @@ class NetworkPolicy:
             values = values @ weights + biases
             if index < len(self.layers) - 1 and self.activation == "relu":
                 values = np.maximum(values, 0.0)
+        # QR-DQN emits num_actions x n_quantiles; fold to a Q-value per action
+        # (mean over quantiles) before argmax, matching js/galagai.js foldQuantiles.
+        if (
+            self.output_head == "quantiles"
+            and self.num_actions
+            and values.size % self.num_actions == 0
+            and values.size != self.num_actions
+        ):
+            quantiles = values.size // self.num_actions
+            values = values.reshape(quantiles, self.num_actions).mean(axis=0)
         return int(np.argmax(values)) if values.size else 0
 
 
 def pilot_policy_spec(model: DQN | None) -> PolicySpec:
     if model is None:
         return {"kind": "heuristic-pilot"}
-    return {"kind": "network", "role": "pilot", "network": export_network(model)}
+    return {
+        "kind": "network",
+        "role": "pilot",
+        "network": export_network(model),
+        "outputHead": selected_spec().output_head,
+        "numActions": len(PILOT_ACTIONS),
+    }
 
 
 def enemy_policy_spec(model: DQN | None) -> PolicySpec:
     if model is None:
         return {"kind": "opening-enemy"}
-    return {"kind": "network", "role": "enemies", "network": export_network(model)}
+    return {
+        "kind": "network",
+        "role": "enemies",
+        "network": export_network(model),
+        "outputHead": selected_spec().output_head,
+        "numActions": len(ENEMY_ACTIONS),
+    }
 
 
 def policy_from_spec(spec: PolicySpec) -> Policy:
@@ -514,7 +538,12 @@ def policy_from_spec(spec: PolicySpec) -> Policy:
         network = spec.get("network")
         if not isinstance(network, dict):
             raise ValueError("Network policy spec is missing its exported network.")
-        return NetworkPolicy(network)
+        num_actions = spec.get("numActions")
+        return NetworkPolicy(
+            network,
+            output_head=str(spec.get("outputHead", "q-values")),
+            num_actions=int(num_actions) if num_actions else None,
+        )
     if kind == "heuristic-pilot":
         return HeuristicPilotPolicy()
     if kind == "heuristic-enemy":
@@ -1440,6 +1469,8 @@ def train_candidate_from_files(args: tuple[object, ...]) -> CandidateResult:
         "kind": "network",
         "role": role,
         "network": export_network(trained_model),
+        "outputHead": selected_spec().output_head,
+        "numActions": len(PILOT_ACTIONS) if role == "pilot" else len(ENEMY_ACTIONS),
     }
     if role == "pilot":
         metrics = evaluate_policy_specs(

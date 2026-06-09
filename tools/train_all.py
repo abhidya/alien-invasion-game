@@ -72,6 +72,7 @@ def publish_command(
         str(target_rounds),
         "--no-push",
         "--no-pages",
+        "--skip-tests",
         *shared_args,
     ]
 
@@ -109,6 +110,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-spawns", type=int, default=2)
     parser.add_argument("--train-workers", type=int, default=1)
     parser.add_argument("--eval-workers", type=int, default=4)
+    # Speed knobs forwarded to train_publish -> trainer (lower = faster matrix).
+    parser.add_argument("--phase-timesteps", type=int, default=None)
+    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--eval-episodes", type=int, default=None)
+    parser.add_argument("--max-phase-iterations", type=int, default=None)
+    parser.add_argument("--min-balanced-rounds", type=int, default=None)
     parser.add_argument("--no-resume", action="store_true", help="Start each technique's checkpoint dir fresh.")
     parser.add_argument("--assemble-only", action="store_true", help="Skip training; just (re)write the brains index.")
     return parser.parse_args()
@@ -123,6 +130,15 @@ def main() -> None:
         "--train-workers", str(args.train_workers),
         "--eval-workers", str(args.eval_workers),
     ]
+    for flag, value in (
+        ("--phase-timesteps", args.phase_timesteps),
+        ("--max-steps", args.max_steps),
+        ("--eval-episodes", args.eval_episodes),
+        ("--max-phase-iterations", args.max_phase_iterations),
+        ("--min-balanced-rounds", args.min_balanced_rounds),
+    ):
+        if value is not None:
+            shared_args += [flag, str(value)]
     if args.no_resume:
         shared_args.append("--no-resume")
 
