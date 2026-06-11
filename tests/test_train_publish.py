@@ -43,7 +43,7 @@ class TrainPublishTest(unittest.TestCase):
         )
 
     def test_default_checkpoint_dir_uses_current_schema_line(self):
-        self.assertEqual(train_publish.DEFAULT_CHECKPOINT_DIR, Path(".training-checkpoints/galagai-balanced-v16"))
+        self.assertEqual(train_publish.DEFAULT_CHECKPOINT_DIR, Path(".training-checkpoints/galagai-balanced-v17"))
         self.assertEqual(train_publish.EXPECTED_MODEL_SCHEMA_VERSION, 17)
 
     def test_add_rounds_command_requires_new_rounds_after_resume(self):
@@ -125,7 +125,7 @@ class TrainPublishTest(unittest.TestCase):
             args = self._args(checkpoint_dir)
             args.no_resume = False
 
-            with self.assertRaisesRegex(RuntimeError, "does not match current schema 16"):
+            with self.assertRaisesRegex(RuntimeError, "does not match current schema 17"):
                 train_publish.validate_resume_checkpoint(args)
 
             args.no_resume = True
