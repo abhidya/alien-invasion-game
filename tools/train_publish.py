@@ -20,8 +20,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from tools import rl_algorithms  # noqa: E402  (dependency-free registry)
 
-EXPECTED_MODEL_SCHEMA_VERSION = 16
-DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v16")
+EXPECTED_MODEL_SCHEMA_VERSION = 17
+DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v17")
 DEFAULT_MODEL = Path("js/galagai-model.json")
 STATIC_PAGE_PATHS = [
     Path("index.html"),

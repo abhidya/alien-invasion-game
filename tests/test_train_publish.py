@@ -44,7 +44,7 @@ class TrainPublishTest(unittest.TestCase):
 
     def test_default_checkpoint_dir_uses_current_schema_line(self):
         self.assertEqual(train_publish.DEFAULT_CHECKPOINT_DIR, Path(".training-checkpoints/galagai-balanced-v16"))
-        self.assertEqual(train_publish.EXPECTED_MODEL_SCHEMA_VERSION, 16)
+        self.assertEqual(train_publish.EXPECTED_MODEL_SCHEMA_VERSION, 17)
 
     def test_add_rounds_command_requires_new_rounds_after_resume(self):
         args = self._args(Path(".training-checkpoints/galagai-balanced-v16"))

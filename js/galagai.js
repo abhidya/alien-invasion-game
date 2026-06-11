@@ -610,11 +610,14 @@
       : pilotFeatures(modelUsesWrap(pilotModel));
     var mask = pilotModel.actionMasking ? pilotActionMask(pilotModel) : null;
     var action = predictModelAction(pilotModel, "stay", features, mask);
-    keys.ArrowLeft = action === "left";
-    keys.ArrowRight = action === "right";
-    keys.ArrowUp = action === "up";
-    keys.ArrowDown = action === "down";
-    if (action === "fire") fire();
+    // Composite move x fire: an action may move AND fire (e.g. "left_fire").
+    // Plain "fire" is stay+fire. Handles both new 10-action models and legacy
+    // 6-action models ("left","right","fire","stay","up","down").
+    keys.ArrowLeft = action === "left" || action === "left_fire";
+    keys.ArrowRight = action === "right" || action === "right_fire";
+    keys.ArrowUp = action === "up" || action === "up_fire";
+    keys.ArrowDown = action === "down" || action === "down_fire";
+    if (action.indexOf("fire") !== -1) fire();
   }
 
   function predictModelAction(model, fallback, featureOverride, mask) {
@@ -664,7 +667,8 @@
   // the manifest sets actionMasking (MaskablePPO); other models pass no mask.
   function pilotActionMask(model) {
     return model.actions.map(function (action) {
-      if (action === "fire") return fireCooldown <= 0;
+      // Any fire variant (fire, left_fire, ...) is gated by the cooldown.
+      if (action.indexOf("fire") !== -1) return fireCooldown <= 0;
       return true;
     });
   }

@@ -35,7 +35,22 @@ from tqdm.auto import tqdm
 from tools import rl_algorithms
 
 
-PILOT_ACTIONS = ["left", "right", "fire", "stay", "up", "down"]
+# Composite move x fire, flattened to a flat Discrete space (DQN needs Discrete,
+# not MultiDiscrete) so the pilot can strafe-and-shoot -- the same enumerated
+# form the enemy action space already uses. Index i decodes to
+# (move = PILOT_MOVES[i % 5], fire = i >= 5).
+PILOT_MOVES = ["stay", "left", "right", "up", "down"]
+PILOT_ACTIONS = [
+    "stay", "left", "right", "up", "down",
+    "fire", "left_fire", "right_fire", "up_fire", "down_fire",
+]
+
+
+def decode_pilot_action(action_index: int) -> tuple[str, bool]:
+    """Map a flat pilot action index to (move, fire)."""
+    if action_index < 0 or action_index >= len(PILOT_ACTIONS):
+        raise ValueError(f"Unknown pilot action {action_index}.")
+    return PILOT_MOVES[action_index % len(PILOT_MOVES)], action_index >= len(PILOT_MOVES)
 ENEMY_ACTIONS = [
     "hold",
     "left",
@@ -121,11 +136,11 @@ from tools.game_spec import (  # noqa: E402
 )
 
 INVALID_DROP_PENALTY = 0.90
-MODEL_SCHEMA_VERSION = 16
+MODEL_SCHEMA_VERSION = 17
 FEATURE_ENCODING = "grid-v1"
 DQN_NET_ARCH = [64, 64]
 MODEL_FILE_DIR = "galagai-models"
-DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v16")
+DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v17")
 RETENTION_LATEST_DEFAULT = 12
 
 # The RL algorithm this trainer currently exports. The browser brain-selector
@@ -383,9 +398,11 @@ class HeuristicPilotPolicy:
         scalars = observation[frame_size:]
         frame = observation[:frame_size].reshape(FRAME_SHAPE)
 
+        # Action indices follow PILOT_ACTIONS: 0 stay, 1 left, 2 right, 3 up,
+        # 4 down, 5 fire, 6 left_fire, 7 right_fire, 8 up_fire, 9 down_fire.
         ship_cells = np.argwhere(frame[0] > 0.0)
         if ship_cells.size == 0:
-            return 3
+            return 0
 
         ship_y, ship_x = ship_cells.mean(axis=0)
 
@@ -397,26 +414,27 @@ class HeuristicPilotPolicy:
             closest_shot = min(shot_cells, key=lambda cell: abs(float(cell[1]) - ship_x))
             shot_y, shot_x = float(closest_shot[0]), float(closest_shot[1])
             if shot_y > GRID_ROWS * 0.48 and abs(shot_x - ship_x) < 2.2:
-                return 0 if shot_x >= ship_x else 1
+                return 1 if shot_x >= ship_x else 2  # dodge left / right
 
         if enemy_cells.size == 0:
-            return 3
+            return 0
 
         target = min(enemy_cells, key=lambda cell: abs(float(cell[1]) - ship_x))
         target_y, target_x = float(target[0]), float(target[1])
         fire_ready = bool(len(scalars) > 0 and scalars[0] > 0.5)
 
-        if fire_ready and abs(target_x - ship_x) < 1.8:
-            return 2
+        # Strafe-and-shoot: fire while sliding toward the target column when ready.
         if target_x < ship_x - 1.2:
-            return 0
+            return 6 if fire_ready else 1  # left_fire / left
         if target_x > ship_x + 1.2:
-            return 1
+            return 7 if fire_ready else 2  # right_fire / right
+        if fire_ready:
+            return 5  # aligned: fire in place
         if target_y < ship_y - 6:
-            return 4
+            return 3  # up
         if target_y > ship_y + 2:
-            return 5
-        return 3
+            return 4  # down
+        return 0
 
 class HeuristicEnemyPolicy:
     def act(self, observation: np.ndarray) -> int:
@@ -773,26 +791,26 @@ class HeadlessGalagai:
             pilot_bullet_dx = 0.0
             pilot_bullet_y = 0.0
         enemy_actions = self.enemy_action_targets(enemy_action)
+        pilot_move, pilot_fire = decode_pilot_action(pilot_action)
         pilot_aligned_action = self.is_pilot_aligned_action(pilot_action, target_dx, target_dy)
-        pilot_aligned_fire = pilot_action == 2 and self.fire_cooldown <= 0 and abs(target_dx) < 0.16
-        pilot_bad_fire = pilot_action == 2 and self.fire_cooldown <= 0 and abs(target_dx) > 0.30
+        pilot_aligned_fire = pilot_fire and self.fire_cooldown <= 0 and abs(target_dx) < 0.16
+        pilot_bad_fire = pilot_fire and self.fire_cooldown <= 0 and abs(target_dx) > 0.30
         enemy_tactical_action = any(
             self.is_enemy_tactical_action(action, target_dx, fleet_y, pilot_bullet_dx, pilot_bullet_y)
             for _, action in enemy_actions
         )
 
-        if pilot_action == 0:
+        # Composite action: move and fire can both happen this step (strafe-and-shoot).
+        if pilot_move == "left":
             self.ship.x -= SHIP_SPEED * ACTION_DT
-        elif pilot_action == 1:
+        elif pilot_move == "right":
             self.ship.x += SHIP_SPEED * ACTION_DT
-        elif pilot_action == 2:
-            pilot_fired, pilot_missed = self.fire_pilot_bullet()
-        elif pilot_action == 4:
+        elif pilot_move == "up":
             self.ship.y -= SHIP_VERTICAL_SPEED * ACTION_DT
-        elif pilot_action == 5:
+        elif pilot_move == "down":
             self.ship.y += SHIP_VERTICAL_SPEED * ACTION_DT
-        elif pilot_action != 3:
-            raise ValueError(f"Unknown pilot action {pilot_action}.")
+        if pilot_fire:
+            pilot_fired, pilot_missed = self.fire_pilot_bullet()
         self.wrap_ship_horizontal()
         self.ship.y = self._clamp(self.ship.y, SHIP_MIN_Y, SHIP_MAX_Y)
 
@@ -1106,19 +1124,18 @@ class HeadlessGalagai:
 
     @staticmethod
     def is_pilot_aligned_action(action: int, target_dx: float, target_dy: float = 0.0) -> bool:
-        if action == 0:
+        # Judge the movement component; fire alignment is scored separately via
+        # pilot_aligned_fire. (Firing is folded into the composite action now.)
+        move, _ = decode_pilot_action(action)
+        if move == "left":
             return target_dx < -0.06
-        if action == 1:
+        if move == "right":
             return target_dx > 0.06
-        if action == 2:
-            return abs(target_dx) < 0.16
-        if action == 3:
-            return abs(target_dx) < 0.05
-        if action == 4:
+        if move == "up":
             return target_dy < -0.08
-        if action == 5:
+        if move == "down":
             return target_dy > 0.08
-        return False
+        return abs(target_dx) < 0.05  # stay: aligned when already on target
 
     @staticmethod
     def is_enemy_tactical_action(
@@ -1196,7 +1213,8 @@ class PilotTrainingEnv(gym.Env):
     def action_masks(self) -> np.ndarray:
         # Legal-action mask for MaskablePPO; must match js/galagai.js
         # pilotActionMask. Only firing is gated (by cooldown); moves are free.
-        mask = [(self.game.fire_cooldown <= 0) if action == "fire" else True for action in PILOT_ACTIONS]
+        fire_ready = self.game.fire_cooldown <= 0
+        mask = [fire_ready if "fire" in action else True for action in PILOT_ACTIONS]
         return np.asarray(mask, dtype=bool)
 
 

@@ -27,7 +27,7 @@ class StaticPilotArtifactTest(unittest.TestCase):
 
     def test_exported_manifest_marks_grid_feature_encoding(self):
         self.assertEqual(train_static_pilot.FEATURE_ENCODING, "grid-v1")
-        self.assertEqual(train_static_pilot.MODEL_SCHEMA_VERSION, 16)
+        self.assertEqual(train_static_pilot.MODEL_SCHEMA_VERSION, 17)
         self.assertEqual(train_static_pilot.FRAME_SHAPE, (8, 28, 48))
         self.assertEqual(len(train_static_pilot.FEATURES), 8 * 28 * 48 + 6)
 
@@ -71,8 +71,8 @@ class StaticPilotArtifactTest(unittest.TestCase):
         env = train_static_pilot.HeadlessGalagai(seed=12, max_steps=20)
         alien = env.aliens[0]
 
-        _, _, first_enemy_reward, _, first_info = env.step(3, [(alien, 3)])
-        _, _, second_enemy_reward, _, second_info = env.step(3, [(alien, 3)])
+        _, _, first_enemy_reward, _, first_info = env.step(0, [(alien, 3)])
+        _, _, second_enemy_reward, _, second_info = env.step(0, [(alien, 3)])
 
         self.assertTrue(first_info["events"].valid_drop)
         self.assertFalse(first_info["events"].invalid_drop)
@@ -174,20 +174,35 @@ class StaticPilotArtifactTest(unittest.TestCase):
         env = train_static_pilot.HeadlessGalagai(seed=24, max_steps=20)
         start_y = env.ship.y
 
-        env.step(4, 0)
+        env.step(3, 0)  # up
         up_y = env.ship.y
-        env.step(5, 0)
+        env.step(4, 0)  # down
 
         self.assertLess(up_y, start_y)
         self.assertGreater(env.ship.y, up_y)
 
         env.ship.y = train_static_pilot.SHIP_MIN_Y - 100
-        env.step(4, 0)
+        env.step(3, 0)  # up clamps to the top bound
         self.assertEqual(env.ship.y, train_static_pilot.SHIP_MIN_Y)
 
         env.ship.y = train_static_pilot.SHIP_MAX_Y + 100
-        env.step(5, 0)
+        env.step(4, 0)  # down clamps to the bottom bound
         self.assertEqual(env.ship.y, train_static_pilot.SHIP_MAX_Y)
+
+    def test_pilot_composite_action_moves_and_fires_together(self):
+        # Strafe-and-shoot: a *_fire action both moves the ship and fires.
+        env = train_static_pilot.HeadlessGalagai(seed=24, max_steps=20)
+        start_x = env.ship.x
+        right_fire = train_static_pilot.PILOT_ACTIONS.index("right_fire")
+
+        env.step(right_fire, 0)
+
+        self.assertGreater(env.ship.x, start_x)        # moved right
+        self.assertEqual(len(env.bullets), 1)          # and fired
+        # decode round-trips
+        move, fire = train_static_pilot.decode_pilot_action(right_fire)
+        self.assertEqual((move, fire), ("right", True))
+        self.assertEqual(train_static_pilot.decode_pilot_action(0), ("stay", False))
 
     def test_opening_enemy_policy_is_armed_from_wave_one(self):
         # No first-wave nerf: the controlled enemy is a shooter on wave 1, so the
@@ -199,7 +214,7 @@ class StaticPilotArtifactTest(unittest.TestCase):
         self.assertTrue(env.can_enemy_fire(env.selected_enemy()))
 
         action = policy.act(env.enemy_control_observation())
-        _, _, _, _, info = env.step(3, action)
+        _, _, _, _, info = env.step(0, action)
 
         self.assertIn(action, {4, 5, 7})
         self.assertTrue(info["events"].enemy_fired)
@@ -498,7 +513,7 @@ class StaticPilotArtifactTest(unittest.TestCase):
             pilot_payload = json.loads((path.parent / payload["networkRef"]).read_text(encoding="utf-8"))
             enemy_payload = json.loads((path.parent / payload["enemies"]["networkRef"]).read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["version"], 16)
+        self.assertEqual(payload["version"], 17)
         self.assertEqual(payload["featureEncoding"], "grid-v1")
         self.assertEqual(payload["frameShape"], list(train_static_pilot.FRAME_SHAPE))
         self.assertEqual(payload["gridChannels"], train_static_pilot.GRID_CHANNELS)
