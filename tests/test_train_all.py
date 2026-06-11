@@ -14,8 +14,8 @@ class TrainAllTest(unittest.TestCase):
         self.assertEqual(train_all.brain_output("maskable-ppo"), Path("js/brains/maskable-ppo/model.json"))
 
     def test_checkpoint_dir_namespaced_per_technique(self):
-        self.assertEqual(train_all.checkpoint_dir("dqn"), Path(".training-checkpoints/galagai-balanced-v16"))
-        self.assertEqual(train_all.checkpoint_dir("ppo"), Path(".training-checkpoints/galagai-balanced-v16-ppo"))
+        self.assertEqual(train_all.checkpoint_dir("dqn"), Path(".training-checkpoints/galagai-balanced-v17"))
+        self.assertEqual(train_all.checkpoint_dir("ppo"), Path(".training-checkpoints/galagai-balanced-v17-ppo"))
 
     def test_brain_manifest_url_relative_to_main(self):
         self.assertEqual(train_all.brain_manifest_url("ppo"), "brains/ppo/model.json")
