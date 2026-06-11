@@ -419,7 +419,7 @@
           width: SPEC.alien.width,
           height: SPEC.alien.height,
           type: (row + col) % 2,
-          role: enemyRoleForSlot(row, col, wave),
+          role: enemyRoleForSlot(row, col),
           alive: true,
           wobble: Math.random() * Math.PI * 2,
           homeX: startX + col * gapX,
@@ -428,16 +428,24 @@
           loop: false,
           scatter: 0,
           shotCooldown: 0,
-          downCooldown: 0
+          downCooldown: 0,
+          // Per-unit "commit clock": armed by this unit's first committed
+          // (non-hold) action, then one descent step per dropEveryActions commits.
+          commitActions: 0,
+          descentDrops: 0
         });
       }
     }
     return aliens;
   }
 
-  function enemyRoleForSlot(row, col, wave) {
-    if (wave >= 3 && row === 0 && col % 3 === 1) return "boss";
-    if (wave >= 2 && row <= 1 && col % 2 === 0) return "butterfly";
+  function enemyRoleForSlot(row, col) {
+    // Wave-independent composition. The roles (and therefore which aliens can
+    // shoot) no longer depend on the wave number, so there is no "first round
+    // nerf" -- butterflies and bosses are armed from wave 1. Difficulty comes
+    // only from the trained enemy generation, not from a scripted role ramp.
+    if (row === 0 && col % 3 === 1) return "boss";
+    if (row <= 1 && col % 2 === 0) return "butterfly";
     return "bee";
   }
 
@@ -558,10 +566,27 @@
       state.wave += 1;
       state.aliens = createFleet(state.wave);
       state.fleetDirection = 1;
+      // speedPerWave is 0 (game_spec.json): the fleet does not speed up per
+      // wave. The only thing that changes across waves is which trained enemy
+      // generation drives the fleet (updateEnemyModelForMode in progression).
       state.fleetSpeed += SPEC.fleet.speedPerWave;
       state.score += 250;
       updateEnemyModelForMode();
       updateHud();
+    }
+  }
+
+  // Per-unit "commit clock": a committed (non-hold) enemy action arms the unit
+  // and counts toward its descent; every dropEveryActions commits the unit drops
+  // one step (growing by ramp each drop). `hold` does not advance the clock, so
+  // holding pauses the descent. Aliens that reach the floor die in updateAliens.
+  // Per-unit and per-action, reset every wave -- never keyed to the wave number.
+  function advanceCommitClock(alien, action) {
+    if (!alien || action === "hold") return;
+    alien.commitActions = (alien.commitActions || 0) + 1;
+    if (alien.commitActions % SPEC.descent.dropEveryActions === 0) {
+      alien.y += SPEC.descent.step * Math.pow(SPEC.descent.ramp, alien.descentDrops || 0);
+      alien.descentDrops = (alien.descentDrops || 0) + 1;
     }
   }
 
@@ -585,11 +610,14 @@
       : pilotFeatures(modelUsesWrap(pilotModel));
     var mask = pilotModel.actionMasking ? pilotActionMask(pilotModel) : null;
     var action = predictModelAction(pilotModel, "stay", features, mask);
-    keys.ArrowLeft = action === "left";
-    keys.ArrowRight = action === "right";
-    keys.ArrowUp = action === "up";
-    keys.ArrowDown = action === "down";
-    if (action === "fire") fire();
+    // Composite move x fire: an action may move AND fire (e.g. "left_fire").
+    // Plain "fire" is stay+fire. Handles both new 10-action models and legacy
+    // 6-action models ("left","right","fire","stay","up","down").
+    keys.ArrowLeft = action === "left" || action === "left_fire";
+    keys.ArrowRight = action === "right" || action === "right_fire";
+    keys.ArrowUp = action === "up" || action === "up_fire";
+    keys.ArrowDown = action === "down" || action === "down_fire";
+    if (action.indexOf("fire") !== -1) fire();
   }
 
   function predictModelAction(model, fallback, featureOverride, mask) {
@@ -639,7 +667,8 @@
   // the manifest sets actionMasking (MaskablePPO); other models pass no mask.
   function pilotActionMask(model) {
     return model.actions.map(function (action) {
-      if (action === "fire") return fireCooldown <= 0;
+      // Any fire variant (fire, left_fire, ...) is gated by the cooldown.
+      if (action.indexOf("fire") !== -1) return fireCooldown <= 0;
       return true;
     });
   }
@@ -701,13 +730,17 @@
       applyEnemyShipAction(action, alien, summary);
     });
     enemyAction = enemyActionSummary(summary);
-    enemyThinkCooldown = Math.max(0.08, 0.20 - state.wave * 0.01);
+    // Decide on the same cadence the policy was trained at (actionDt), constant
+    // across waves. This is snappier than the old wave-1 throttle (0.20s) and
+    // removes the per-wave speed-up of decision making.
+    enemyThinkCooldown = SPEC.timing.enemyThinkCooldown;
     updateHud();
   }
 
   function applyEnemyShipAction(action, alien, summary) {
     if (!alien || !alien.alive) return;
     action = normalizeEnemyShipAction(action);
+    advanceCommitClock(alien, action);
     if (action === "left" || action === "left_fire") {
       alien.x -= 32;
       wrapAlienHorizontal(alien);
@@ -1075,13 +1108,15 @@
   }
 
   function updateFreeAlien(alien, dt) {
+    // Dive/scatter speeds are constant across waves (no per-wave ramp); the
+    // only thing that changes by wave is which trained enemy generation plays.
     var shipCenter = state.ship.x + state.ship.width / 2;
     if (alien.scatter) {
-      alien.x += alien.scatter * (140 + state.wave * 12) * dt;
-      alien.y += (55 + state.wave * 8) * dt;
+      alien.x += alien.scatter * 200 * dt;
+      alien.y += 95 * dt;
     } else {
-      alien.x += clamp(shipCenter - (alien.x + alien.width / 2), -1, 1) * (180 + state.wave * 16) * dt;
-      alien.y += (130 + state.wave * 14) * dt;
+      alien.x += clamp(shipCenter - (alien.x + alien.width / 2), -1, 1) * 260 * dt;
+      alien.y += 200 * dt;
     }
     wrapAlienHorizontal(alien);
     if (alien.y > canvas.height - 130) {
@@ -1106,7 +1141,9 @@
       return alien.role === "butterfly" || alien.role === "boss";
     });
     if (!shooters.length) return;
-    var chance = (0.18 + state.wave * 0.035) * dt;
+    // Scripted fallback fire rate (only used when no enemy model is loaded).
+    // Constant across waves -- no per-wave aggression ramp.
+    var chance = 0.3 * dt;
     if (Math.random() < chance) {
       var alien = shooters[Math.floor(Math.random() * shooters.length)];
       fireAlienShot(alien);
