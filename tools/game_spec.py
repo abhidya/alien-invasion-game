@@ -71,16 +71,15 @@ ENEMY_SHIP_SHOT_COOLDOWN_SECONDS = float(_SPEC["timing"]["enemyShipShotCooldown"
 ENEMY_SHIP_CONTROL_STEP_X = float(_SPEC["enemyControl"]["stepX"])
 ENEMY_SHIP_CONTROL_STEP_Y = FLEET_DROP * float(_SPEC["enemyControl"]["stepYFactor"])
 
-# Kill pressure: the whole live fleet is periodically shoved toward the bottom
-# (aliens reaching the floor die). The cadence ramps with time elapsed in the
-# current wave and resets each wave, so it is an escalating time limit on the
-# enemy rather than a wave-number buff. See game_spec.json "pressure".
-_PRESSURE = _SPEC.get("pressure", {})
-PRESSURE_BASE_INTERVAL = float(_PRESSURE.get("baseInterval", 2.2))
-PRESSURE_MIN_INTERVAL = float(_PRESSURE.get("minInterval", 0.5))
-PRESSURE_INTERVAL_DECAY = float(_PRESSURE.get("intervalDecay", 0.85))
-PRESSURE_STEP = float(_PRESSURE.get("step", 14.0))
-PRESSURE_STEP_GROWTH = float(_PRESSURE.get("stepGrowth", 1.05))
+# Per-unit "commit clock": an enemy does not descend until its first committed
+# (non-hold) action arms it; after that it drops DESCENT_STEP px every
+# DESCENT_DROP_EVERY_ACTIONS committed actions (step grows by DESCENT_RAMP each
+# drop). hold does not advance the clock. Per-unit, per-action, reset each wave
+# -- never keyed to the wave number. See game_spec.json "descent".
+_DESCENT = _SPEC.get("descent", {})
+DESCENT_DROP_EVERY_ACTIONS = int(_DESCENT.get("dropEveryActions", 6))
+DESCENT_STEP = float(_DESCENT.get("step", 16.0))
+DESCENT_RAMP = float(_DESCENT.get("ramp", 1.0))
 
 MAX_ALIENS_NORMALIZER = float(_SPEC["limits"]["maxAliensNormalizer"])
 MAX_ENEMY_SHOTS_PER_STEP = int(_SPEC["limits"]["maxEnemyShotsPerStep"])

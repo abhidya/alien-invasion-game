@@ -400,20 +400,8 @@
       aliens: createFleet(1),
       fleetDirection: 1,
       fleetDrop: SPEC.fleet.drop,
-      fleetSpeed: SPEC.fleet.baseSpeed,
-      pressureCooldown: SPEC.pressure.baseInterval,
-      pressureInterval: SPEC.pressure.baseInterval,
-      pressureStep: SPEC.pressure.step
+      fleetSpeed: SPEC.fleet.baseSpeed
     };
-  }
-
-  // Kill pressure: reset the ramping push-down timer at the start of each wave.
-  // The pressure escalates with time elapsed in the wave, never with the wave
-  // number, so it is an escalating time limit rather than wave progression.
-  function resetKillPressure() {
-    state.pressureCooldown = SPEC.pressure.baseInterval;
-    state.pressureInterval = SPEC.pressure.baseInterval;
-    state.pressureStep = SPEC.pressure.step;
   }
 
   function createFleet(wave) {
@@ -440,7 +428,11 @@
           loop: false,
           scatter: 0,
           shotCooldown: 0,
-          downCooldown: 0
+          downCooldown: 0,
+          // Per-unit "commit clock": armed by this unit's first committed
+          // (non-hold) action, then one descent step per dropEveryActions commits.
+          commitActions: 0,
+          descentDrops: 0
         });
       }
     }
@@ -567,7 +559,6 @@
     updateShip(dt);
     updateBullets(dt);
     runEnemyModel(dt);
-    applyKillPressure(dt);
     updateAliens(dt);
     maybeAlienFire(dt);
     checkHits();
@@ -580,31 +571,23 @@
       // generation drives the fleet (updateEnemyModelForMode in progression).
       state.fleetSpeed += SPEC.fleet.speedPerWave;
       state.score += 250;
-      resetKillPressure();
       updateEnemyModelForMode();
       updateHud();
     }
   }
 
-  // Periodically shove the whole live fleet toward the bottom. Aliens that
-  // reach the floor die in updateAliens, so this is an escalating time limit
-  // that pressures the enemy to act before its fleet is wiped. The cadence
-  // ramps (interval shrinks toward minInterval, step grows) with time elapsed
-  // in the current wave and is reset every wave -- never keyed to the wave
-  // number, so it adds no wave progression.
-  function applyKillPressure(dt) {
-    if (!state.aliens.some(function (alien) { return alien.alive; })) return;
-    state.pressureCooldown -= dt;
-    if (state.pressureCooldown > 0) return;
-    state.aliens.forEach(function (alien) {
-      if (alien.alive) alien.y += state.pressureStep;
-    });
-    state.pressureInterval = Math.max(
-      SPEC.pressure.minInterval,
-      state.pressureInterval * SPEC.pressure.intervalDecay
-    );
-    state.pressureStep *= SPEC.pressure.stepGrowth;
-    state.pressureCooldown += state.pressureInterval;
+  // Per-unit "commit clock": a committed (non-hold) enemy action arms the unit
+  // and counts toward its descent; every dropEveryActions commits the unit drops
+  // one step (growing by ramp each drop). `hold` does not advance the clock, so
+  // holding pauses the descent. Aliens that reach the floor die in updateAliens.
+  // Per-unit and per-action, reset every wave -- never keyed to the wave number.
+  function advanceCommitClock(alien, action) {
+    if (!alien || action === "hold") return;
+    alien.commitActions = (alien.commitActions || 0) + 1;
+    if (alien.commitActions % SPEC.descent.dropEveryActions === 0) {
+      alien.y += SPEC.descent.step * Math.pow(SPEC.descent.ramp, alien.descentDrops || 0);
+      alien.descentDrops = (alien.descentDrops || 0) + 1;
+    }
   }
 
   function runPilot() {
@@ -753,6 +736,7 @@
   function applyEnemyShipAction(action, alien, summary) {
     if (!alien || !alien.alive) return;
     action = normalizeEnemyShipAction(action);
+    advanceCommitClock(alien, action);
     if (action === "left" || action === "left_fire") {
       alien.x -= 32;
       wrapAlienHorizontal(alien);

@@ -104,13 +104,11 @@ from tools.game_spec import (  # noqa: E402
     FLEET_SPEED_PER_WAVE,
     FLEET_START_X_OFFSET,
     FLEET_TOP_Y,
+    DESCENT_DROP_EVERY_ACTIONS,
+    DESCENT_RAMP,
+    DESCENT_STEP,
     MAX_ALIENS_NORMALIZER,
     MAX_ENEMY_SHOTS_PER_STEP,
-    PRESSURE_BASE_INTERVAL,
-    PRESSURE_INTERVAL_DECAY,
-    PRESSURE_MIN_INTERVAL,
-    PRESSURE_STEP,
-    PRESSURE_STEP_GROWTH,
     SHIP_HEIGHT,
     SHIP_MAX_Y,
     SHIP_MIN_Y,
@@ -179,6 +177,10 @@ class Actor:
     role: str = "bee"
     shot_cooldown: float = 0.0
     down_cooldown: float = 0.0
+    # Per-unit "commit clock": armed by the unit's first committed (non-hold)
+    # action, then one descent step per DESCENT_DROP_EVERY_ACTIONS commits.
+    commit_actions: int = 0
+    descent_drops: int = 0
 
     @property
     def center_x(self) -> float:
@@ -596,11 +598,8 @@ class HeadlessGalagai:
         self.fleet_direction = 1
         self.fleet_speed = FLEET_BASE_SPEED
         self.enemy_control_cursor = 0
-        # Kill pressure: ramping push-down timer, reset every wave (see
-        # apply_kill_pressure). Mirrors js/galagai.js applyKillPressure.
-        self.pressure_cooldown = PRESSURE_BASE_INTERVAL
-        self.pressure_interval = PRESSURE_BASE_INTERVAL
-        self.pressure_step = PRESSURE_STEP
+        # Per-unit descent (commit clock) lives on each Actor; a fresh fleet
+        # starts every unit disarmed.
         self.aliens = self.create_fleet(self.wave)
         self.drop_attempts = 0
         self.invalid_drops = 0
@@ -804,7 +803,6 @@ class HeadlessGalagai:
         invalid_drop = enemy_events["invalid_downs"] > 0
 
         self.update_projectiles()
-        self.apply_kill_pressure()
         self.update_aliens()
         hit_events = self.resolve_collisions()
         pilot_hits = int(hit_events["aliensHit"])
@@ -821,7 +819,6 @@ class HeadlessGalagai:
             self.fleet_direction = 1
             self.aliens = self.create_fleet(self.wave)
             self.bullets.clear()
-            self.reset_kill_pressure()
             wave_cleared = True
         if self.lives <= 0:
             done = True
@@ -889,6 +886,7 @@ class HeadlessGalagai:
             if action_index < 0 or action_index >= len(ENEMY_ACTIONS):
                 raise ValueError(f"Unknown enemy action {action_index}.")
             action = ENEMY_ACTIONS[action_index]
+            self.advance_commit_clock(alien, action)
             if action in {"left", "left_fire"}:
                 alien.x -= ENEMY_SHIP_CONTROL_STEP_X
                 self.wrap_alien_horizontal(alien)
@@ -1016,29 +1014,18 @@ class HeadlessGalagai:
         self.bullets = [bullet for bullet in self.bullets if bullet.y > -bullet.height]
         self.enemy_shots = [shot for shot in self.enemy_shots if shot.y < CANVAS_HEIGHT + shot.height]
 
-    def reset_kill_pressure(self) -> None:
-        self.pressure_cooldown = PRESSURE_BASE_INTERVAL
-        self.pressure_interval = PRESSURE_BASE_INTERVAL
-        self.pressure_step = PRESSURE_STEP
-
-    def apply_kill_pressure(self) -> None:
-        # Periodically shove the whole live fleet toward the bottom; aliens that
-        # reach the floor die in update_aliens. The cadence ramps with time
-        # elapsed in the wave (interval shrinks toward PRESSURE_MIN_INTERVAL,
-        # step grows) and is reset each wave -- an escalating time limit on the
-        # enemy, never keyed to the wave number. Mirrors js/galagai.js
-        # applyKillPressure (browser ticks by frame dt; the trainer by ACTION_DT).
-        if not any(alien.alive for alien in self.aliens):
+    def advance_commit_clock(self, alien: Actor, action: str) -> None:
+        # Per-unit "commit clock": a committed (non-hold) action arms the unit
+        # and counts toward its descent; every DESCENT_DROP_EVERY_ACTIONS commits
+        # the unit drops one step (growing by DESCENT_RAMP each drop). hold does
+        # not advance the clock, so holding pauses the descent. Aliens that reach
+        # the floor die in update_aliens. Mirrors js/galagai.js commit clock.
+        if action == "hold":
             return
-        self.pressure_cooldown -= ACTION_DT
-        if self.pressure_cooldown > 0.0:
-            return
-        for alien in self.aliens:
-            if alien.alive:
-                alien.y += self.pressure_step
-        self.pressure_interval = max(PRESSURE_MIN_INTERVAL, self.pressure_interval * PRESSURE_INTERVAL_DECAY)
-        self.pressure_step *= PRESSURE_STEP_GROWTH
-        self.pressure_cooldown += self.pressure_interval
+        alien.commit_actions += 1
+        if alien.commit_actions % DESCENT_DROP_EVERY_ACTIONS == 0:
+            alien.y += DESCENT_STEP * (DESCENT_RAMP ** alien.descent_drops)
+            alien.descent_drops += 1
 
     def update_aliens(self) -> None:
         live_aliens = [alien for alien in self.aliens if alien.alive]
@@ -2357,7 +2344,7 @@ def train_self_play(
         "environment": {
             "name": "HeadlessGalagai",
             "openingEnemyPolicy": "role-gated bootstrap: bees drift/drop, butterflies and bosses are armed from wave 1 (no first-wave nerf)",
-            "killPressure": "whole fleet shoved toward the floor on a ramping, time-in-wave cadence (aliens reaching the bottom die); resets each wave, never keyed to wave number",
+            "commitClockDescent": "per-unit: an enemy descends only after its first committed (non-hold) action arms it, then one step every dropEveryActions commits; holding pauses the descent; aliens reaching the floor die; reset each wave, never keyed to wave number",
             "waveProgression": "none beyond trained enemy generations: fleet speed/size and enemy shot speed are constant across waves",
             "curriculumWaves": curriculum_waves,
             "dropCooldownSeconds": DROP_COOLDOWN_SECONDS,

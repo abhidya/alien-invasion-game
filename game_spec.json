@@ -36,13 +36,11 @@
     "enemyShipShotCooldown": 0.65,
     "enemyThinkCooldown": 0.12
   },
-  "_pressure_comment": "Kill pressure: the whole live fleet is periodically shoved toward the bottom (aliens reaching the floor die) -- an escalating time limit that pressures the enemy to act. It ramps with time elapsed in the current wave (interval shrinks by intervalDecay each push down to minInterval; step grows by stepGrowth) and resets every wave. It is keyed to time-in-wave, NOT the wave number, so it adds no wave progression.",
-  "pressure": {
-    "baseInterval": 2.2,
-    "minInterval": 0.5,
-    "intervalDecay": 0.85,
-    "step": 14,
-    "stepGrowth": 1.05
+  "_descent_comment": "Per-unit 'commit clock': an enemy does not descend until its FIRST committed (non-hold) action arms its clock; after that it drops `step` px every `dropEveryActions` committed actions, with the step growing by `ramp` each drop. `hold` does not advance the clock, so holding pauses the descent (catch-your-breath) without hunting. The clock is per-unit and per-action and resets every wave -- never keyed to the wave number -- so hunting costs altitude and the only thing that scales across waves is the trained enemy generation.",
+  "descent": {
+    "dropEveryActions": 6,
+    "step": 16,
+    "ramp": 1.0
   },
   "enemyControl": { "stepX": 32, "stepYFactor": 0.7 },
   "limits": { "maxAliensNormalizer": 45, "maxEnemyShotsPerStep": 4 }

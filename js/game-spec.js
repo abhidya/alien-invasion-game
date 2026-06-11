@@ -51,16 +51,15 @@ window.GAME_SPEC = {
     enemyShipShotCooldown: 0.65,
     enemyThinkCooldown: 0.12
   },
-  // Kill pressure: periodically shove the whole live fleet toward the bottom
-  // (aliens reaching the floor die). Ramps with time-in-wave (interval shrinks
-  // by intervalDecay to minInterval; step grows by stepGrowth) and resets each
-  // wave. Keyed to time, NOT the wave number, so it adds no wave progression.
-  pressure: {
-    baseInterval: 2.2,
-    minInterval: 0.5,
-    intervalDecay: 0.85,
-    step: 14,
-    stepGrowth: 1.05
+  // Per-unit "commit clock": an enemy does not descend until its first
+  // committed (non-hold) action arms it; then it drops `step` px every
+  // `dropEveryActions` committed actions (step grows by `ramp` each drop).
+  // `hold` does not advance the clock, so holding pauses the descent. Per-unit,
+  // per-action, reset each wave -- never keyed to the wave number.
+  descent: {
+    dropEveryActions: 6,
+    step: 16,
+    ramp: 1.0
   },
   enemyControl: { stepX: 32, stepYFactor: 0.7 },
   limits: { maxAliensNormalizer: 45, maxEnemyShotsPerStep: 4 }

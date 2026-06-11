@@ -204,30 +204,34 @@ class StaticPilotArtifactTest(unittest.TestCase):
         self.assertIn(action, {4, 5, 7})
         self.assertTrue(info["events"].enemy_fired)
 
-    def test_kill_pressure_pushes_fleet_down_and_ramps(self):
-        # Kill pressure shoves the whole live fleet toward the floor on a ramping
-        # cadence (interval shrinks, step grows) and resets each wave.
+    def test_commit_clock_descends_per_unit_on_committed_actions(self):
+        # Per-unit commit clock: hold neither arms nor advances the descent;
+        # committed actions accumulate and drop the unit one step every
+        # DESCENT_DROP_EVERY_ACTIONS commits. Firing counts as a commit, so
+        # camping-and-spraying still sinks.
         env = train_static_pilot.HeadlessGalagai(seed=31, max_steps=20)
-        ys_before = [alien.y for alien in env.aliens]
+        every = train_static_pilot.DESCENT_DROP_EVERY_ACTIONS
+        alien = env.aliens[0]
+        y0 = alien.y
 
-        # One tick that does not exhaust the interval leaves the fleet in place.
-        env.pressure_cooldown = 2.0 * train_static_pilot.ACTION_DT
-        env.apply_kill_pressure()
-        self.assertEqual([alien.y for alien in env.aliens], ys_before)
+        for _ in range(every + 2):
+            env.advance_commit_clock(alien, "hold")
+        self.assertEqual(alien.commit_actions, 0)
+        self.assertEqual(alien.y, y0)
 
-        # Force the interval to elapse on the next tick, then it pushes.
-        env.pressure_cooldown = train_static_pilot.ACTION_DT
-        first_step = env.pressure_step
-        env.apply_kill_pressure()
-        self.assertTrue(all(after > before for after, before in zip([a.y for a in env.aliens], ys_before)))
-        self.assertAlmostEqual(env.aliens[0].y - ys_before[0], first_step)
-        # Ramp: the next interval is shorter and the next step is larger.
-        self.assertLess(env.pressure_interval, train_static_pilot.PRESSURE_BASE_INTERVAL)
-        self.assertGreater(env.pressure_step, first_step)
+        for _ in range(every - 1):
+            env.advance_commit_clock(alien, "left")
+        self.assertEqual(alien.y, y0)  # not enough commits yet
 
-        env.reset_kill_pressure()
-        self.assertEqual(env.pressure_interval, train_static_pilot.PRESSURE_BASE_INTERVAL)
-        self.assertEqual(env.pressure_step, train_static_pilot.PRESSURE_STEP)
+        env.advance_commit_clock(alien, "fire")  # the Xth commit -> one drop
+        self.assertEqual(alien.commit_actions, every)
+        self.assertEqual(alien.descent_drops, 1)
+        self.assertAlmostEqual(alien.y - y0, train_static_pilot.DESCENT_STEP)
+
+    def test_fresh_fleet_starts_with_disarmed_commit_clocks(self):
+        env = train_static_pilot.HeadlessGalagai(seed=33, max_steps=20)
+        fleet = env.create_fleet(3)
+        self.assertTrue(all(a.commit_actions == 0 and a.descent_drops == 0 for a in fleet))
 
     def test_no_wave_progression_beyond_trained_generation(self):
         # Fleet speed and size, and enemy shot speed, are constant across waves;
