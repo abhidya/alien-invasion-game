@@ -13,24 +13,34 @@
   },
   "alien": { "width": 48, "height": 34 },
   "bullet": { "speed": 620 },
-  "enemyShot": { "speed": 230, "speedPerWave": 20 },
+  "_enemyShot_comment": "speedPerWave is 0: enemy shot speed no longer ramps with the wave number. Difficulty comes only from the trained enemy generation driving the fleet, not from scripted per-wave buffs.",
+  "enemyShot": { "speed": 230, "speedPerWave": 0 },
+  "_fleet_comment": "speedPerWave 0 plus constant columns/rows: the fleet never gets faster or larger with the wave number. perWave 0 holds columns at base (6); rows.max == rows.base holds rows at base (3) every wave.",
   "fleet": {
     "drop": 18,
     "baseSpeed": 38,
-    "speedPerWave": 13,
+    "speedPerWave": 0,
     "gapX": 78,
     "gapY": 54,
     "topY": 74,
     "startXOffset": 24,
-    "columns": { "base": 6, "perWave": 1, "max": 9 },
-    "rows": { "base": 3, "perWavePeriod": 2, "max": 5 }
+    "columns": { "base": 6, "perWave": 0, "max": 9 },
+    "rows": { "base": 3, "perWavePeriod": 2, "max": 3 }
   },
+  "_timing_comment": "enemyThinkCooldown is the browser's enemy decision cadence; pinned to actionDt so the deployed policy decides on the same step it was trained at (snappier and consistent, no wave scaling).",
   "timing": {
     "actionDt": 0.12,
     "dropCooldown": 1.08,
     "enemyShotCooldown": 0.0,
     "enemyShipDownCooldown": 0.45,
-    "enemyShipShotCooldown": 0.65
+    "enemyShipShotCooldown": 0.65,
+    "enemyThinkCooldown": 0.12
+  },
+  "_descent_comment": "Per-unit 'commit clock': an enemy does not descend until its FIRST committed (non-hold) action arms its clock; after that it drops `step` px every `dropEveryActions` committed actions, with the step growing by `ramp` each drop. `hold` does not advance the clock, so holding pauses the descent (catch-your-breath) without hunting. The clock is per-unit and per-action and resets every wave -- never keyed to the wave number -- so hunting costs altitude and the only thing that scales across waves is the trained enemy generation.",
+  "descent": {
+    "dropEveryActions": 6,
+    "step": 16,
+    "ramp": 1.0
   },
   "enemyControl": { "stepX": 32, "stepYFactor": 0.7 },
   "limits": { "maxAliensNormalizer": 45, "maxEnemyShotsPerStep": 4 }
