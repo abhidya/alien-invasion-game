@@ -31,7 +31,10 @@ if str(ROOT) not in sys.path:
 
 from tools import rl_algorithms
 
-SCHEMA_VERSION = 16
+# Model-artifact schema version. Must match train_static_pilot.MODEL_SCHEMA_VERSION
+# (kept as a local constant so this orchestrator stays torch-free at import, the
+# same convention train_publish.py uses with EXPECTED_MODEL_SCHEMA_VERSION).
+SCHEMA_VERSION = 17
 MAIN_MANIFEST = Path("js/galagai-model.json")
 BRAINS_DIR = Path("js/brains")
 DEFAULT_TECHNIQUES = ["dqn", "qrdqn", "ppo", "a2c", "maskable-ppo"]
@@ -123,7 +126,7 @@ def _git(args: list[str], *, cwd: Path = ROOT, check: bool = True) -> None:
 def deploy_artifacts(techniques: list[str]) -> None:
     """Commit + push the trained brains to master, then mirror to gh-pages."""
     _git(["add", "js", "game_spec.json"])
-    _git(["commit", "-m", f"Publish v16 grid brains: {', '.join(techniques)}"], check=False)
+    _git(["commit", "-m", f"Publish v{SCHEMA_VERSION} grid brains: {', '.join(techniques)}"], check=False)
     for attempt in range(4):
         try:
             _git(["push", "origin", "master"])
@@ -146,7 +149,7 @@ def deploy_artifacts(techniques: list[str]) -> None:
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(source, destination) if source.is_dir() else shutil.copy2(source, destination)
         _git(["add", "-A"], cwd=worktree)
-        _git(["commit", "-m", "Publish v16 grid demo (brains + per-side selector)"], cwd=worktree, check=False)
+        _git(["commit", "-m", f"Publish v{SCHEMA_VERSION} grid demo (brains + per-side selector)"], cwd=worktree, check=False)
         for attempt in range(4):
             try:
                 _git(["push", "origin", "HEAD:gh-pages"], cwd=worktree)
