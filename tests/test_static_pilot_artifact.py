@@ -80,14 +80,21 @@ class StaticPilotArtifactTest(unittest.TestCase):
         self.assertLess(second_enemy_reward, first_enemy_reward)
         self.assertEqual(second_info["invalidDrops"], 1)
 
-    def test_wave_one_bees_cannot_fire(self):
+    def test_bees_cannot_fire_but_shooters_are_armed_from_wave_one(self):
+        # No first-wave nerf: shooter roles exist on wave 1 and can fire. Firing
+        # is gated by role (bee vs butterfly/boss), never by the wave number.
         env = train_static_pilot.HeadlessGalagai(seed=14, max_steps=20)
 
-        _, _, _, _, info = env.step(3, 5)
+        bee = next(alien for alien in env.aliens if alien.role == "bee")
+        shooter = next(alien for alien in env.aliens if alien.role in ("butterfly", "boss"))
 
-        self.assertTrue(info["events"].invalid_fire)
-        self.assertFalse(info["events"].enemy_fired)
-        self.assertEqual(info["enemyFires"], 0)
+        bee_events = env.apply_enemy_actions([(bee, 7)])
+        self.assertEqual(bee_events["enemy_fires"], 0)
+        self.assertEqual(bee_events["invalid_fires"], 1)
+
+        shooter_events = env.apply_enemy_actions([(shooter, 7)])
+        self.assertEqual(shooter_events["enemy_fires"], 1)
+        self.assertEqual(len(env.enemy_shots), 1)
 
     def test_enemy_reaching_bottom_dies_without_pilot_life_loss(self):
         env = train_static_pilot.HeadlessGalagai(seed=20, max_steps=20)
@@ -182,22 +189,55 @@ class StaticPilotArtifactTest(unittest.TestCase):
         env.step(5, 0)
         self.assertEqual(env.ship.y, train_static_pilot.SHIP_MAX_Y)
 
-    def test_opening_enemy_policy_respects_wave_roles(self):
+    def test_opening_enemy_policy_is_armed_from_wave_one(self):
+        # No first-wave nerf: the controlled enemy is a shooter on wave 1, so the
+        # opening policy can fire immediately instead of only after wave one.
         policy = train_static_pilot.OpeningEnemyPolicy()
-        wave_one = train_static_pilot.HeadlessGalagai(seed=17, max_steps=20)
+        env = train_static_pilot.HeadlessGalagai(seed=17, max_steps=20)
 
-        self.assertNotIn(policy.act(wave_one.enemy_control_observation()), {4, 5, 6, 7})
+        self.assertTrue(any(alien.role in ("butterfly", "boss") for alien in env.aliens))
+        self.assertTrue(env.can_enemy_fire(env.selected_enemy()))
 
-        wave_two = train_static_pilot.HeadlessGalagai(seed=18, max_steps=20)
-        wave_two.start_wave = 2
-        wave_two.wave = 2
-        wave_two.aliens = wave_two.create_fleet(2)
-
-        action = policy.act(wave_two.enemy_control_observation())
-        _, _, _, _, info = wave_two.step(3, action)
+        action = policy.act(env.enemy_control_observation())
+        _, _, _, _, info = env.step(3, action)
 
         self.assertIn(action, {4, 5, 7})
         self.assertTrue(info["events"].enemy_fired)
+
+    def test_kill_pressure_pushes_fleet_down_and_ramps(self):
+        # Kill pressure shoves the whole live fleet toward the floor on a ramping
+        # cadence (interval shrinks, step grows) and resets each wave.
+        env = train_static_pilot.HeadlessGalagai(seed=31, max_steps=20)
+        ys_before = [alien.y for alien in env.aliens]
+
+        # One tick that does not exhaust the interval leaves the fleet in place.
+        env.pressure_cooldown = 2.0 * train_static_pilot.ACTION_DT
+        env.apply_kill_pressure()
+        self.assertEqual([alien.y for alien in env.aliens], ys_before)
+
+        # Force the interval to elapse on the next tick, then it pushes.
+        env.pressure_cooldown = train_static_pilot.ACTION_DT
+        first_step = env.pressure_step
+        env.apply_kill_pressure()
+        self.assertTrue(all(after > before for after, before in zip([a.y for a in env.aliens], ys_before)))
+        self.assertAlmostEqual(env.aliens[0].y - ys_before[0], first_step)
+        # Ramp: the next interval is shorter and the next step is larger.
+        self.assertLess(env.pressure_interval, train_static_pilot.PRESSURE_BASE_INTERVAL)
+        self.assertGreater(env.pressure_step, first_step)
+
+        env.reset_kill_pressure()
+        self.assertEqual(env.pressure_interval, train_static_pilot.PRESSURE_BASE_INTERVAL)
+        self.assertEqual(env.pressure_step, train_static_pilot.PRESSURE_STEP)
+
+    def test_no_wave_progression_beyond_trained_generation(self):
+        # Fleet speed and size, and enemy shot speed, are constant across waves;
+        # only the trained enemy generation changes difficulty.
+        env = train_static_pilot.HeadlessGalagai(seed=32, max_steps=20)
+        wave_one = env.create_fleet(1)
+        wave_five = env.create_fleet(5)
+        self.assertEqual(len(wave_one), len(wave_five))
+        self.assertEqual(train_static_pilot.FLEET_SPEED_PER_WAVE, 0.0)
+        self.assertEqual(train_static_pilot.ENEMY_SHOT_SPEED_PER_WAVE, 0.0)
 
     def test_curriculum_start_wave_does_not_count_as_free_pilot_win(self):
         env = train_static_pilot.HeadlessGalagai(seed=19, max_steps=20, max_start_wave=3)

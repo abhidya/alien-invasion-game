@@ -400,8 +400,20 @@
       aliens: createFleet(1),
       fleetDirection: 1,
       fleetDrop: SPEC.fleet.drop,
-      fleetSpeed: SPEC.fleet.baseSpeed
+      fleetSpeed: SPEC.fleet.baseSpeed,
+      pressureCooldown: SPEC.pressure.baseInterval,
+      pressureInterval: SPEC.pressure.baseInterval,
+      pressureStep: SPEC.pressure.step
     };
+  }
+
+  // Kill pressure: reset the ramping push-down timer at the start of each wave.
+  // The pressure escalates with time elapsed in the wave, never with the wave
+  // number, so it is an escalating time limit rather than wave progression.
+  function resetKillPressure() {
+    state.pressureCooldown = SPEC.pressure.baseInterval;
+    state.pressureInterval = SPEC.pressure.baseInterval;
+    state.pressureStep = SPEC.pressure.step;
   }
 
   function createFleet(wave) {
@@ -419,7 +431,7 @@
           width: SPEC.alien.width,
           height: SPEC.alien.height,
           type: (row + col) % 2,
-          role: enemyRoleForSlot(row, col, wave),
+          role: enemyRoleForSlot(row, col),
           alive: true,
           wobble: Math.random() * Math.PI * 2,
           homeX: startX + col * gapX,
@@ -435,9 +447,13 @@
     return aliens;
   }
 
-  function enemyRoleForSlot(row, col, wave) {
-    if (wave >= 3 && row === 0 && col % 3 === 1) return "boss";
-    if (wave >= 2 && row <= 1 && col % 2 === 0) return "butterfly";
+  function enemyRoleForSlot(row, col) {
+    // Wave-independent composition. The roles (and therefore which aliens can
+    // shoot) no longer depend on the wave number, so there is no "first round
+    // nerf" -- butterflies and bosses are armed from wave 1. Difficulty comes
+    // only from the trained enemy generation, not from a scripted role ramp.
+    if (row === 0 && col % 3 === 1) return "boss";
+    if (row <= 1 && col % 2 === 0) return "butterfly";
     return "bee";
   }
 
@@ -551,6 +567,7 @@
     updateShip(dt);
     updateBullets(dt);
     runEnemyModel(dt);
+    applyKillPressure(dt);
     updateAliens(dt);
     maybeAlienFire(dt);
     checkHits();
@@ -558,11 +575,36 @@
       state.wave += 1;
       state.aliens = createFleet(state.wave);
       state.fleetDirection = 1;
+      // speedPerWave is 0 (game_spec.json): the fleet does not speed up per
+      // wave. The only thing that changes across waves is which trained enemy
+      // generation drives the fleet (updateEnemyModelForMode in progression).
       state.fleetSpeed += SPEC.fleet.speedPerWave;
       state.score += 250;
+      resetKillPressure();
       updateEnemyModelForMode();
       updateHud();
     }
+  }
+
+  // Periodically shove the whole live fleet toward the bottom. Aliens that
+  // reach the floor die in updateAliens, so this is an escalating time limit
+  // that pressures the enemy to act before its fleet is wiped. The cadence
+  // ramps (interval shrinks toward minInterval, step grows) with time elapsed
+  // in the current wave and is reset every wave -- never keyed to the wave
+  // number, so it adds no wave progression.
+  function applyKillPressure(dt) {
+    if (!state.aliens.some(function (alien) { return alien.alive; })) return;
+    state.pressureCooldown -= dt;
+    if (state.pressureCooldown > 0) return;
+    state.aliens.forEach(function (alien) {
+      if (alien.alive) alien.y += state.pressureStep;
+    });
+    state.pressureInterval = Math.max(
+      SPEC.pressure.minInterval,
+      state.pressureInterval * SPEC.pressure.intervalDecay
+    );
+    state.pressureStep *= SPEC.pressure.stepGrowth;
+    state.pressureCooldown += state.pressureInterval;
   }
 
   function runPilot() {
@@ -701,7 +743,10 @@
       applyEnemyShipAction(action, alien, summary);
     });
     enemyAction = enemyActionSummary(summary);
-    enemyThinkCooldown = Math.max(0.08, 0.20 - state.wave * 0.01);
+    // Decide on the same cadence the policy was trained at (actionDt), constant
+    // across waves. This is snappier than the old wave-1 throttle (0.20s) and
+    // removes the per-wave speed-up of decision making.
+    enemyThinkCooldown = SPEC.timing.enemyThinkCooldown;
     updateHud();
   }
 
@@ -1075,13 +1120,15 @@
   }
 
   function updateFreeAlien(alien, dt) {
+    // Dive/scatter speeds are constant across waves (no per-wave ramp); the
+    // only thing that changes by wave is which trained enemy generation plays.
     var shipCenter = state.ship.x + state.ship.width / 2;
     if (alien.scatter) {
-      alien.x += alien.scatter * (140 + state.wave * 12) * dt;
-      alien.y += (55 + state.wave * 8) * dt;
+      alien.x += alien.scatter * 200 * dt;
+      alien.y += 95 * dt;
     } else {
-      alien.x += clamp(shipCenter - (alien.x + alien.width / 2), -1, 1) * (180 + state.wave * 16) * dt;
-      alien.y += (130 + state.wave * 14) * dt;
+      alien.x += clamp(shipCenter - (alien.x + alien.width / 2), -1, 1) * 260 * dt;
+      alien.y += 200 * dt;
     }
     wrapAlienHorizontal(alien);
     if (alien.y > canvas.height - 130) {
@@ -1106,7 +1153,9 @@
       return alien.role === "butterfly" || alien.role === "boss";
     });
     if (!shooters.length) return;
-    var chance = (0.18 + state.wave * 0.035) * dt;
+    // Scripted fallback fire rate (only used when no enemy model is loaded).
+    // Constant across waves -- no per-wave aggression ramp.
+    var chance = 0.3 * dt;
     if (Math.random() < chance) {
       var alien = shooters[Math.floor(Math.random() * shooters.length)];
       fireAlienShot(alien);

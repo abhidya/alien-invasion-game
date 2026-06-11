@@ -52,12 +52,14 @@ class GameSpecContractTest(unittest.TestCase):
             game_spec.ENEMY_SHIP_CONTROL_STEP_Y,
             spec["fleet"]["drop"] * spec["enemyControl"]["stepYFactor"],
         )
-        # Fleet shape helpers reproduce the historical formulas.
+        # Fleet shape is constant across waves (no wave progression beyond the
+        # trained enemy generation): columns stay at base (perWave 0) and rows
+        # stay at base (rows.max == rows.base).
         self.assertEqual(game_spec.fleet_columns(0), 6)
-        self.assertEqual(game_spec.fleet_columns(2), 8)
-        self.assertEqual(game_spec.fleet_columns(99), 9)
+        self.assertEqual(game_spec.fleet_columns(2), 6)
+        self.assertEqual(game_spec.fleet_columns(99), 6)
         self.assertEqual(game_spec.fleet_rows(0), 3)
-        self.assertEqual(game_spec.fleet_rows(4), 5)
+        self.assertEqual(game_spec.fleet_rows(4), 3)
 
     @unittest.skipUnless(shutil.which("node"), "node not available to evaluate js/game-spec.js")
     def test_js_literal_matches_canonical(self):

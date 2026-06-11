@@ -106,6 +106,11 @@ from tools.game_spec import (  # noqa: E402
     FLEET_TOP_Y,
     MAX_ALIENS_NORMALIZER,
     MAX_ENEMY_SHOTS_PER_STEP,
+    PRESSURE_BASE_INTERVAL,
+    PRESSURE_INTERVAL_DECAY,
+    PRESSURE_MIN_INTERVAL,
+    PRESSURE_STEP,
+    PRESSURE_STEP_GROWTH,
     SHIP_HEIGHT,
     SHIP_MAX_Y,
     SHIP_MIN_Y,
@@ -591,6 +596,11 @@ class HeadlessGalagai:
         self.fleet_direction = 1
         self.fleet_speed = FLEET_BASE_SPEED
         self.enemy_control_cursor = 0
+        # Kill pressure: ramping push-down timer, reset every wave (see
+        # apply_kill_pressure). Mirrors js/galagai.js applyKillPressure.
+        self.pressure_cooldown = PRESSURE_BASE_INTERVAL
+        self.pressure_interval = PRESSURE_BASE_INTERVAL
+        self.pressure_step = PRESSURE_STEP
         self.aliens = self.create_fleet(self.wave)
         self.drop_attempts = 0
         self.invalid_drops = 0
@@ -614,7 +624,7 @@ class HeadlessGalagai:
                         FLEET_TOP_Y + row * gap_y,
                         ALIEN_WIDTH,
                         ALIEN_HEIGHT,
-                        role=self.enemy_role_for_slot(row, col, wave),
+                        role=self.enemy_role_for_slot(row, col),
                     )
                 )
         return aliens
@@ -683,10 +693,13 @@ class HeadlessGalagai:
         ).astype(np.float32)
 
     @staticmethod
-    def enemy_role_for_slot(row: int, col: int, wave: int) -> str:
-        if wave >= 3 and row == 0 and col % 3 == 1:
+    def enemy_role_for_slot(row: int, col: int) -> str:
+        # Wave-independent composition (mirrors js/galagai.js enemyRoleForSlot):
+        # butterflies and bosses are armed from wave 1, so there is no first-wave
+        # nerf. Difficulty comes only from the trained enemy generation.
+        if row == 0 and col % 3 == 1:
             return "boss"
-        if wave >= 2 and row <= 1 and col % 2 == 0:
+        if row <= 1 and col % 2 == 0:
             return "butterfly"
         return "bee"
 
@@ -791,6 +804,7 @@ class HeadlessGalagai:
         invalid_drop = enemy_events["invalid_downs"] > 0
 
         self.update_projectiles()
+        self.apply_kill_pressure()
         self.update_aliens()
         hit_events = self.resolve_collisions()
         pilot_hits = int(hit_events["aliensHit"])
@@ -800,10 +814,14 @@ class HeadlessGalagai:
         if self.live_alien_count == 0:
             self.wave += 1
             self.score += 250
+            # FLEET_SPEED_PER_WAVE is 0 (game_spec.json): the fleet does not
+            # speed up per wave. Difficulty across waves comes only from the
+            # trained enemy generation deployed in the browser runtime.
             self.fleet_speed += FLEET_SPEED_PER_WAVE
             self.fleet_direction = 1
             self.aliens = self.create_fleet(self.wave)
             self.bullets.clear()
+            self.reset_kill_pressure()
             wave_cleared = True
         if self.lives <= 0:
             done = True
@@ -997,6 +1015,30 @@ class HeadlessGalagai:
             shot.y += shot.speed * ACTION_DT
         self.bullets = [bullet for bullet in self.bullets if bullet.y > -bullet.height]
         self.enemy_shots = [shot for shot in self.enemy_shots if shot.y < CANVAS_HEIGHT + shot.height]
+
+    def reset_kill_pressure(self) -> None:
+        self.pressure_cooldown = PRESSURE_BASE_INTERVAL
+        self.pressure_interval = PRESSURE_BASE_INTERVAL
+        self.pressure_step = PRESSURE_STEP
+
+    def apply_kill_pressure(self) -> None:
+        # Periodically shove the whole live fleet toward the bottom; aliens that
+        # reach the floor die in update_aliens. The cadence ramps with time
+        # elapsed in the wave (interval shrinks toward PRESSURE_MIN_INTERVAL,
+        # step grows) and is reset each wave -- an escalating time limit on the
+        # enemy, never keyed to the wave number. Mirrors js/galagai.js
+        # applyKillPressure (browser ticks by frame dt; the trainer by ACTION_DT).
+        if not any(alien.alive for alien in self.aliens):
+            return
+        self.pressure_cooldown -= ACTION_DT
+        if self.pressure_cooldown > 0.0:
+            return
+        for alien in self.aliens:
+            if alien.alive:
+                alien.y += self.pressure_step
+        self.pressure_interval = max(PRESSURE_MIN_INTERVAL, self.pressure_interval * PRESSURE_INTERVAL_DECAY)
+        self.pressure_step *= PRESSURE_STEP_GROWTH
+        self.pressure_cooldown += self.pressure_interval
 
     def update_aliens(self) -> None:
         live_aliens = [alien for alien in self.aliens if alien.alive]
@@ -2314,7 +2356,9 @@ def train_self_play(
         "candidateSpawns": candidate_spawns,
         "environment": {
             "name": "HeadlessGalagai",
-            "openingEnemyPolicy": "role-gated bootstrap: bees drift/drop, butterflies and bosses can shoot after wave one",
+            "openingEnemyPolicy": "role-gated bootstrap: bees drift/drop, butterflies and bosses are armed from wave 1 (no first-wave nerf)",
+            "killPressure": "whole fleet shoved toward the floor on a ramping, time-in-wave cadence (aliens reaching the bottom die); resets each wave, never keyed to wave number",
+            "waveProgression": "none beyond trained enemy generations: fleet speed/size and enemy shot speed are constant across waves",
             "curriculumWaves": curriculum_waves,
             "dropCooldownSeconds": DROP_COOLDOWN_SECONDS,
             "enemyShotCooldownSeconds": ENEMY_SHOT_COOLDOWN_SECONDS,

@@ -174,6 +174,23 @@ butterflies, and bosses. Bees can drift and drop, butterflies can fire, dive, an
 scatter, and bosses add looping attack runs; the trained enemy action space is
 gated through those roles so every enemy type does not get every move.
 
+### Game balance: no wave progression beyond trained generations
+
+Difficulty comes from *who* you face, not from scripted per-wave buffs. The fleet
+speed, fleet size, and enemy-shot speed are constant across waves
+(`game_spec.json` zeros out the per-wave scaling), and the enemy roles are
+wave-independent, so butterflies and bosses are **armed from wave 1** (no
+first-wave nerf). The only thing that escalates with the wave number is which
+**trained enemy generation** drives the fleet (progression mode). On top of that,
+a **kill-pressure** timer periodically shoves the whole live fleet toward the
+bottom — aliens that reach the floor die — on a cadence that ramps with time
+elapsed in the wave and resets each wave. That makes every wave an escalating
+time limit on the enemy rather than another scripted difficulty step, and the
+browser decides enemy actions on the same `actionDt` cadence the policy trains
+at. All of this is mirrored in the headless trainer
+(`tools/train_static_pilot.py`) so agents train under the exact physics they play
+under.
+
 First create your fork of the repository, then clone using:
 ```
 cd path/to/folder
