@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools import train_all
 
@@ -43,6 +44,20 @@ class TrainAllTest(unittest.TestCase):
 
         self.assertEqual(command[command.index("--device") + 1], "cuda")
         self.assertIn("--require-cuda", command)
+
+    def test_parallel_training_jobs_run_each_command(self):
+        jobs = [
+            ("dqn", ["python", "tools/train_publish.py", "--algorithm", "dqn"]),
+            ("ppo", ["python", "tools/train_publish.py", "--algorithm", "ppo"]),
+        ]
+
+        with mock.patch.object(train_all.subprocess, "run") as run:
+            train_all.run_training_jobs(jobs, workers=2)
+
+        self.assertEqual(run.call_count, 2)
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertIn(jobs[0][1], commands)
+        self.assertIn(jobs[1][1], commands)
 
     def test_index_algorithms_includes_all_supported_when_training_subset(self):
         self.assertEqual(

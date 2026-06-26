@@ -18,8 +18,8 @@ the actual ``train_publish`` subprocess is what requires torch.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -114,6 +114,28 @@ def publish_command(
         command += ["--no-push", "--no-pages", "--no-commit"]
     command += shared_args
     return command
+
+
+def run_training_jobs(jobs: list[tuple[str, list[str]]], workers: int) -> None:
+    """Run train_publish subprocesses, optionally in parallel."""
+    if workers <= 1:
+        for algorithm, command in jobs:
+            print(f"\n=== training {algorithm} -> {brain_output(algorithm)} ===", flush=True)
+            print("+ " + " ".join(command), flush=True)
+            subprocess.run(command, cwd=ROOT, check=True)
+        return
+
+    worker_count = min(max(1, workers), len(jobs))
+    print(f"\n=== training {len(jobs)} techniques with {worker_count} parallel jobs ===", flush=True)
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {}
+        for algorithm, command in jobs:
+            print(f"+ [{algorithm}] " + " ".join(command), flush=True)
+            futures[executor.submit(subprocess.run, command, cwd=ROOT, check=True)] = algorithm
+        for future in as_completed(futures):
+            algorithm = futures[future]
+            future.result()
+            print(f"=== finished {algorithm} ===", flush=True)
 
 
 def assemble_brains_index(main_manifest_path: Path, algorithms: list[str]) -> dict[str, object]:
@@ -220,6 +242,12 @@ def parse_args() -> argparse.Namespace:
         help="Assemble + deploy after EACH technique finishes, so it becomes selectable "
         "on the live site immediately rather than waiting for the whole matrix.",
     )
+    parser.add_argument(
+        "--parallel-techniques",
+        type=int,
+        default=1,
+        help="Train this many techniques at once, then assemble/deploy once. Do not combine with timed or per-technique deploys.",
+    )
     return parser.parse_args()
 
 
@@ -246,8 +274,15 @@ def main() -> None:
     if args.no_resume:
         shared_args.append("--no-resume")
 
+    if args.parallel_techniques > 1 and (args.deploy_after_each or args.publish_interval_seconds):
+        raise RuntimeError(
+            "--parallel-techniques cannot be combined with --deploy-after-each or "
+            "--publish-interval-seconds; train in parallel and use --deploy to push once at the end."
+        )
+
     if not args.assemble_only:
         BRAINS_DIR.mkdir(parents=True, exist_ok=True)
+        jobs: list[tuple[str, list[str]]] = []
         for algorithm in args.techniques:
             command = publish_command(
                 algorithm,
@@ -257,16 +292,18 @@ def main() -> None:
                 require_cuda=args.require_cuda,
                 publish_interval=args.publish_interval_seconds,
             )
-            print(f"\n=== training {algorithm} -> {brain_output(algorithm)} ===", flush=True)
-            print("+ " + " ".join(command), flush=True)
-            subprocess.run(command, cwd=ROOT, check=True)
             if args.deploy_after_each:
+                run_training_jobs([(algorithm, command)], workers=1)
                 # Reassemble with the techniques finished so far and deploy now, so
                 # this one is selectable on the live site immediately.
                 index = assemble_brains_index(MAIN_MANIFEST, index_algorithms(args.techniques))
                 print(json.dumps({"brainsIndex": index}, indent=2), flush=True)
                 print(f"=== deploying after {algorithm}: master + gh-pages ===", flush=True)
                 deploy_artifacts(index_algorithms(args.techniques))
+            else:
+                jobs.append((algorithm, command))
+        if jobs:
+            run_training_jobs(jobs, workers=args.parallel_techniques)
 
     index = assemble_brains_index(MAIN_MANIFEST, index_algorithms(args.techniques))
     print(json.dumps({"brainsIndex": index}, indent=2), flush=True)
