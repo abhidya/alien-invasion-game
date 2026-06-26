@@ -91,6 +91,7 @@
     var a = String(algorithm || "").toLowerCase();
     if (a.indexOf("maskable") >= 0) return "maskable-ppo";
     if (a.indexOf("qr") >= 0 || a.indexOf("quantile") >= 0) return "qr-dqn";
+    if (a.indexOf("a2c") >= 0 || a.indexOf("actor-critic") >= 0) return "a2c";
     if (a.indexOf("ppo") >= 0) return "ppo";
     if (a.indexOf("deepset") >= 0 || a.indexOf("attention") >= 0) return "deepset-attn";
     if (a.indexOf("neat") >= 0 || a.indexOf("neuro") >= 0 || a.indexOf("-es") >= 0) return "neuro-es";
@@ -103,17 +104,40 @@
   function publishRuntime(model) {
     model = model || {};
     var base = mapAlgorithmToTechnique(model.algorithm);
+    var pilotFeatures = runtimeFeatureInfo(model, "pilot");
+    var enemyFeatures = runtimeFeatureInfo(model, "enemy");
     window.GalagAIRuntime = {
       algorithm: model.algorithm || null,
       // Reflect the brain actually driving each side (may differ once mixed).
       pilotTechniqueId: pilotBrainId || (model.pilot && model.pilot.technique) || base,
-      enemyTechniqueId: enemyBrainId || (model.enemies && model.enemies.technique) || base
+      enemyTechniqueId: enemyBrainId || (model.enemies && model.enemies.technique) || base,
+      pilotFeatureEncoding: pilotFeatures.featureEncoding,
+      enemyFeatureEncoding: enemyFeatures.featureEncoding,
+      pilotFrameShape: pilotFeatures.frameShape,
+      enemyFrameShape: enemyFeatures.frameShape,
+      pilotScalarFeatureCount: pilotFeatures.scalarFeatureCount,
+      enemyScalarFeatureCount: enemyFeatures.scalarFeatureCount
     };
     try {
       window.dispatchEvent(new CustomEvent("galagai:runtime", { detail: window.GalagAIRuntime }));
     } catch (e) {
       /* CustomEvent unsupported -- selector keeps its defaults. */
     }
+  }
+
+  function runtimeFeatureInfo(model, side) {
+    var live = side === "pilot" ? pilotModel : enemyModel;
+    var sideBlock = side === "pilot" ? model.pilot : model.enemies;
+    var source = live && live.featureEncoding ? live : (sideBlock && sideBlock.featureEncoding ? sideBlock : model);
+    var fallback = sideBlock && sideBlock.featureEncoding ? sideBlock : model;
+    var scalars = Array.isArray(source.scalarFeatures)
+      ? source.scalarFeatures.length
+      : (Array.isArray(fallback.scalarFeatures) ? fallback.scalarFeatures.length : null);
+    return {
+      featureEncoding: source.featureEncoding || fallback.featureEncoding || model.featureEncoding || null,
+      frameShape: source.frameShape || fallback.frameShape || model.frameShape || null,
+      scalarFeatureCount: scalars
+    };
   }
 
   // Register the techniques that have exported artifacts. The default technique
