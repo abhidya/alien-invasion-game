@@ -59,11 +59,31 @@ def brain_manifest_url(algorithm: str) -> str:
     return brain_output(algorithm).relative_to(MAIN_MANIFEST.parent).as_posix()
 
 
+def index_algorithms(algorithms: list[str]) -> list[str]:
+    """Algorithms to include in the browser brain index.
+
+    Training a subset (for example only a2c) must not prune already-published
+    manifests for other supported techniques.
+    """
+    ordered: list[str] = []
+    for algorithm in [*rl_algorithms.algorithm_keys(), *algorithms]:
+        if algorithm not in ordered:
+            ordered.append(algorithm)
+    return ordered
+
+
+def cli_path(path: Path) -> str:
+    """Serialize repo-relative paths consistently across platforms."""
+    return path.as_posix()
+
+
 def publish_command(
     algorithm: str,
     *,
     target_rounds: int,
     shared_args: list[str],
+    device: str = "auto",
+    require_cuda: bool = False,
     publish_interval: float | None = None,
     python: str = sys.executable,
 ) -> list[str]:
@@ -73,13 +93,17 @@ def publish_command(
         "--algorithm",
         algorithm,
         "--checkpoint-dir",
-        str(checkpoint_dir(algorithm)),
+        cli_path(checkpoint_dir(algorithm)),
         "--model",
-        str(brain_output(algorithm)),
+        cli_path(brain_output(algorithm)),
+        "--device",
+        device,
         "--target-rounds",
         str(target_rounds),
         "--skip-tests",
     ]
+    if require_cuda:
+        command.append("--require-cuda")
     if publish_interval:
         # Let train_publish commit/push/mirror this technique's progress on a
         # timer (the same periodic-push you used for single runs). The brain
@@ -171,6 +195,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-spawns", type=int, default=2)
     parser.add_argument("--train-workers", type=int, default=1)
     parser.add_argument("--eval-workers", type=int, default=4)
+    parser.add_argument(
+        "--pilot-warmup-generations",
+        type=int,
+        default=3,
+        help="Bootstrap pilot generations for fresh artifacts so the first export is publishable.",
+    )
+    parser.add_argument(
+        "--enemy-warmup-generations",
+        type=int,
+        default=1,
+        help="Bootstrap enemy generations for fresh artifacts so the first export is publishable.",
+    )
+    parser.add_argument("--device", default="auto", help="Torch/SB3 device forwarded to training: auto, cpu, cuda, cuda:0, etc.")
+    parser.add_argument("--require-cuda", action="store_true", help="Fail training if torch cannot see a CUDA GPU.")
     # Speed knobs forwarded to train_publish -> trainer (lower = faster matrix).
     parser.add_argument("--phase-timesteps", type=int, default=None)
     parser.add_argument("--max-steps", type=int, default=None)
@@ -204,6 +242,8 @@ def main() -> None:
         "--candidate-spawns", str(args.candidate_spawns),
         "--train-workers", str(args.train_workers),
         "--eval-workers", str(args.eval_workers),
+        "--pilot-warmup-generations", str(args.pilot_warmup_generations),
+        "--enemy-warmup-generations", str(args.enemy_warmup_generations),
     ]
     for flag, value in (
         ("--phase-timesteps", args.phase_timesteps),
@@ -224,6 +264,8 @@ def main() -> None:
                 algorithm,
                 target_rounds=args.target_rounds,
                 shared_args=shared_args,
+                device=args.device,
+                require_cuda=args.require_cuda,
                 publish_interval=args.publish_interval_seconds,
             )
             print(f"\n=== training {algorithm} -> {brain_output(algorithm)} ===", flush=True)
@@ -232,17 +274,17 @@ def main() -> None:
             if args.deploy_after_each:
                 # Reassemble with the techniques finished so far and deploy now, so
                 # this one is selectable on the live site immediately.
-                index = assemble_brains_index(MAIN_MANIFEST, args.techniques)
+                index = assemble_brains_index(MAIN_MANIFEST, index_algorithms(args.techniques))
                 print(json.dumps({"brainsIndex": index}, indent=2), flush=True)
                 print(f"=== deploying after {algorithm}: master + gh-pages ===", flush=True)
-                deploy_artifacts(args.techniques)
+                deploy_artifacts(index_algorithms(args.techniques))
 
-    index = assemble_brains_index(MAIN_MANIFEST, args.techniques)
+    index = assemble_brains_index(MAIN_MANIFEST, index_algorithms(args.techniques))
     print(json.dumps({"brainsIndex": index}, indent=2), flush=True)
 
     if args.deploy and not args.deploy_after_each:
         print("\n=== deploying: master + gh-pages ===", flush=True)
-        deploy_artifacts(args.techniques)
+        deploy_artifacts(index_algorithms(args.techniques))
         print("Deployed. Live demo: https://abhidya.github.io/alien-invasion-game/#architectures", flush=True)
     elif args.deploy_after_each:
         print("\nDeployed after each technique. Live demo: "

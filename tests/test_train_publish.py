@@ -30,6 +30,8 @@ class TrainPublishTest(unittest.TestCase):
             keep_latest_versions=12,
             replay_buffer_size=50_000,
             algorithm="dqn",
+            device="auto",
+            require_cuda=False,
             pilot_warmup_generations=0,
             enemy_warmup_generations=0,
             model=Path("js/galagai-model.json"),
@@ -66,6 +68,17 @@ class TrainPublishTest(unittest.TestCase):
         self.assertEqual(command[pilot_index + 1], "3")
         self.assertEqual(command[enemy_index + 1], "1")
 
+    def test_cuda_flags_are_forwarded_to_trainer(self):
+        args = self._args(Path(".training-checkpoints/galagai-balanced-v17"))
+        args.device = "cuda"
+        args.require_cuda = True
+
+        command = train_publish.build_train_command(args, target_rounds=4, required_new_balanced_rounds=4)
+
+        device_index = command.index("--device")
+        self.assertEqual(command[device_index + 1], "cuda")
+        self.assertIn("--require-cuda", command)
+
     def test_interrupt_exports_recovered_completed_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_dir = Path(tmpdir) / "checkpoints"
@@ -92,6 +105,7 @@ class TrainPublishTest(unittest.TestCase):
         self.assertIn("--no-progress", calls[1])
         self.assertIn("--curriculum-waves", calls[1])
         self.assertIn("--candidate-spawns", calls[1])
+        self.assertIn("--device", calls[1])
         target_index = calls[1].index("--balanced-rounds")
         self.assertEqual(calls[1][target_index + 1], "2")
         required_index = calls[1].index("--required-new-balanced-rounds")

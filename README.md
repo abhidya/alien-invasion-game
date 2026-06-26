@@ -54,13 +54,13 @@ python tools/train_publish.py --add-rounds 24
 ```
 
 `tools/train_publish.py` is the normal self-serve workflow. It resumes from
-`.training-checkpoints/galagai-balanced-v16`, trains the next balanced rounds,
+`.training-checkpoints/galagai-balanced-v17`, trains the next balanced rounds,
 exports static JSON, prunes retained model files, runs verification, commits and
 pushes `master`, mirrors the same static files to `gh-pages`, and checks the
 public Pages manifest. Use `--target-rounds <n>` instead of `--add-rounds` when
 you want an absolute round target. The publisher refuses to resume stale schema
 directories such as `.training-checkpoints/galagai-balanced-v12`; use the default
-v14 directory for current training, or pair a fresh directory with `--no-resume`.
+v17 directory for current training, or pair a fresh directory with `--no-resume`.
 If you press Ctrl-C after at least one new
 publishable generation checkpoint is complete, the wrapper exports and publishes
 the latest completed checkpoint instead of throwing away the run. A checkpoint is
@@ -271,7 +271,7 @@ file is a legacy TensorFlow artifact preserved only for inspection.
 The CLI uses tqdm progress by default and prints ETA, side/generation counts,
 win-rate postfix metrics, drop/invalid-drop rates, and final artifact size
 summary. It checkpoints after every completed generation to
-`.training-checkpoints/galagai-balanced-v16` by default, including the SB3 model, replay
+`.training-checkpoints/galagai-balanced-v17` by default, including the SB3 model, replay
 buffer, exported generation JSON, and resumable `state.json`. Pass
 `--resume` to continue from that checkpoint directory, `--checkpoint-dir <path>`
 to change the location, `--no-checkpoints` for a throwaway run,
@@ -289,6 +289,28 @@ tiered retention, commits `master`, and publishes `gh-pages` in one verified
 workflow. The local resumable SB3 checkpoint state under `.training-checkpoints/`
 is intentionally ignored by git; the pushed checkpoints are the static JSON
 networks under `js/galagai-models/`.
+
+To train every wired brain family with CUDA and push after each completed
+technique, install a CUDA-enabled Torch wheel in `.venv-rl`, then run:
+
+```bash
+python -m pip install --force-reinstall torch==2.2.2 --index-url https://download.pytorch.org/whl/cu121
+python tools/train_all.py \
+  --device cuda \
+  --require-cuda \
+  --target-rounds 4 \
+  --pilot-warmup-generations 3 \
+  --enemy-warmup-generations 1 \
+  --curriculum-waves 3 \
+  --candidate-spawns 2 \
+  --train-workers 1 \
+  --eval-workers 4 \
+  --deploy-after-each
+```
+
+`--deploy-after-each` reassembles the full `brains` index after each technique
+and mirrors the static files to `gh-pages`, so training only a missing family
+does not remove already-published brains from the live selector.
 
 For a future Gymnasium adapter, `alien_invasion/gym_space.py` documents the
 modern `reset` and `step` shape:

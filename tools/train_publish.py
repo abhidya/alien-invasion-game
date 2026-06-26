@@ -202,9 +202,13 @@ def build_train_command(
         str(args.replay_buffer_size),
         "--algorithm",
         args.algorithm,
+        "--device",
+        args.device,
         "--out",
         str(args.model),
     ]
+    if args.require_cuda:
+        command.append("--require-cuda")
     if force_resume or ((args.checkpoint_dir / "state.json").exists() and not args.no_resume):
         command.insert(2, "--resume")
     if args.no_progress or force_no_progress:
@@ -301,7 +305,7 @@ def publish_current_artifacts(args: argparse.Namespace, *, interrupted: bool = F
     if interrupted:
         print(json.dumps({"publishedInterruptedCheckpoint": summary}, indent=2), flush=True)
     if not args.no_commit:
-        commit_master(summary, no_push=args.no_push)
+        commit_master(summary, model_path=args.model, no_push=args.no_push)
     if not args.no_pages:
         publish_pages(summary, no_push=args.no_push)
     return summary
@@ -444,8 +448,8 @@ def git_has_changes(paths: Sequence[Path] | None = None, *, cached: bool = False
     return subprocess.run(command, cwd=cwd).returncode != 0
 
 
-def commit_master(summary: dict[str, object], *, no_push: bool) -> bool:
-    run(["git", "add", "--all", "js/galagai-model.json", "js/galagai-models"])
+def commit_master(summary: dict[str, object], *, model_path: Path, no_push: bool) -> bool:
+    run(["git", "add", "--all", str(model_path), str(model_path.parent / "galagai-models")])
     if not git_has_changes(cached=True):
         print("No master model changes to commit.", flush=True)
         return False
@@ -567,6 +571,16 @@ def parse_args() -> argparse.Namespace:
         default=rl_algorithms.DEFAULT_ALGORITHM,
         help="RL family to train and export (dqn, qrdqn, ppo, a2c, maskable-ppo). "
         "Pair each non-default algorithm with its own --checkpoint-dir and --out.",
+    )
+    parser.add_argument(
+        "--device",
+        default=os.environ.get("GALAGAI_TORCH_DEVICE", "auto"),
+        help="Torch/SB3 device selector forwarded to the trainer: auto, cpu, cuda, cuda:0, etc.",
+    )
+    parser.add_argument(
+        "--require-cuda",
+        action="store_true",
+        help="Fail before training if CUDA is requested but unavailable.",
     )
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--no-progress", action="store_true")

@@ -25,6 +25,7 @@ if str(ROOT) not in sys.path:
 
 import gymnasium as gym
 import numpy as np
+import torch
 import torch.nn as nn
 from gymnasium import spaces
 from stable_baselines3 import DQN
@@ -152,7 +153,9 @@ RL_ALGORITHM = "stable-baselines3-dqn"
 ALGORITHM_TECHNIQUE = {
     "stable-baselines3-dqn": "dqn",
     "stable-baselines3-qrdqn": "qr-dqn",
+    "sb3-contrib-qrdqn": "qr-dqn",
     "stable-baselines3-ppo": "ppo",
+    "stable-baselines3-a2c": "a2c",
     "sb3-contrib-maskable-ppo": "maskable-ppo",
     "neuroevolution-es": "neuro-es",
 }
@@ -1363,6 +1366,11 @@ def selected_spec() -> "rl_algorithms.AlgorithmSpec":
     return rl_algorithms.get_algorithm(selected_algorithm_key())
 
 
+def selected_device() -> str:
+    """SB3 device selector inherited by spawned training workers."""
+    return os.environ.get("GALAGAI_TORCH_DEVICE", "auto")
+
+
 def _import_agent_class(spec: "rl_algorithms.AlgorithmSpec"):
     import importlib
 
@@ -1392,6 +1400,7 @@ def make_dqn(env: Any, seed: int, learning_rate: float) -> DQN:
         exploration_final_eps=0.05,
         policy_kwargs={"net_arch": DQN_NET_ARCH},
         seed=seed,
+        device=selected_device(),
         verbose=0,
     )
 
@@ -1424,6 +1433,7 @@ def build_agent(env: Any, seed: int, learning_rate: float):
             target_update_interval=500,
             policy_kwargs=policy_kwargs,
             seed=seed,
+            device=selected_device(),
             verbose=0,
         )
     return agent_cls(
@@ -1434,13 +1444,14 @@ def build_agent(env: Any, seed: int, learning_rate: float):
         n_steps=256,
         policy_kwargs=policy_kwargs,
         seed=seed,
+        device=selected_device(),
         verbose=0,
     )
 
 
 def load_agent(path: str | Path):
     """Load a saved agent of the selected algorithm's class."""
-    return _import_agent_class(selected_spec()).load(str(path))
+    return _import_agent_class(selected_spec()).load(str(path), device=selected_device())
 
 
 def train_role_model(
@@ -2760,10 +2771,26 @@ def main() -> None:
         help="RL family to train and export. Default dqn keeps the legacy path; "
         "on-policy choices (ppo/a2c/maskable-ppo) skip the replay buffer entirely.",
     )
+    parser.add_argument(
+        "--device",
+        default=selected_device(),
+        help="Torch/SB3 device selector: auto, cpu, cuda, cuda:0, etc. Use cuda with --require-cuda for GPU training.",
+    )
+    parser.add_argument(
+        "--require-cuda",
+        action="store_true",
+        help="Fail before training if torch cannot see a CUDA GPU.",
+    )
     args = parser.parse_args()
     # Propagate via env so spawned candidate workers (ProcessPoolExecutor) inherit them.
     os.environ["GALAGAI_REPLAY_BUFFER_SIZE"] = str(max(1_000, int(args.replay_buffer_size)))
     os.environ["GALAGAI_ALGORITHM"] = args.algorithm
+    os.environ["GALAGAI_TORCH_DEVICE"] = args.device
+    if args.require_cuda and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA was required but torch.cuda.is_available() is false. "
+            "Install a CUDA-enabled torch wheel, e.g. torch==2.2.2 from https://download.pytorch.org/whl/cu121."
+        )
     retention = CheckpointRetention(mode=args.checkpoint_retention, keep_latest=args.keep_latest_versions)
 
     pilot_model, enemy_model, self_play = train_self_play(

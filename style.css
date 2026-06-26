@@ -345,8 +345,12 @@ canvas {
   color: var(--green);
 }
 
-.arch-status-trainable {
+.arch-status-exported {
   color: var(--cyan);
+}
+
+.arch-status-trainable {
+  color: var(--pink);
 }
 
 .arch-status-planned {
@@ -625,6 +629,81 @@ body.arch-detail-open {
   outline: 2px solid var(--cyan);
   outline-offset: 1px;
 }
+.feature-select-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin: 0 0 1.25rem;
+}
+.feature-select select {
+  border-color: rgba(255, 209, 102, 0.32);
+}
+#feature-explainer {
+  --feature-accent: var(--amber);
+  margin: 0 0 1rem;
+  padding: 1.1rem 1.2rem;
+  border: 1px solid rgba(255, 209, 102, 0.24);
+  border-left: 3px solid var(--feature-accent);
+  border-radius: 14px;
+  background: rgba(8, 9, 24, 0.45);
+}
+#feature-explainer .brain-eyebrow,
+#feature-explainer .brain-section-title {
+  color: var(--feature-accent);
+}
+.feature-notice {
+  margin: 0 0 1rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 9px;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+.feature-notice-current {
+  color: #07101d;
+  background: linear-gradient(135deg, var(--cyan), var(--green));
+}
+.feature-notice-planned {
+  color: var(--amber);
+  border: 1px dashed rgba(255, 209, 102, 0.5);
+  background: rgba(255, 209, 102, 0.07);
+}
+.feature-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+}
+.feature-fact {
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(52, 245, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(5, 7, 18, 0.52);
+}
+.feature-fact dt {
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.feature-fact dd {
+  margin: 0.25rem 0 0;
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.feature-notes {
+  margin: 1rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  line-height: 1.5;
+  font-size: 0.9rem;
+}
+.feature-notes li {
+  margin-bottom: 0.3rem;
+}
 #brain-explainer {
   --brain-accent: var(--cyan);
   border: 1px solid var(--line);
@@ -660,6 +739,11 @@ body.arch-detail-open {
 .brain-notice-live {
   color: #07101d;
   background: linear-gradient(135deg, var(--green), var(--cyan));
+}
+.brain-notice-available {
+  color: var(--green);
+  border: 1px solid rgba(131, 255, 143, 0.45);
+  background: rgba(131, 255, 143, 0.08);
 }
 .brain-notice-offline,
 .brain-notice-planned {

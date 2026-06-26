@@ -26,9 +26,29 @@ class TrainAllTest(unittest.TestCase):
         self.assertIn("--algorithm", command)
         self.assertEqual(command[command.index("--algorithm") + 1], "ppo")
         self.assertEqual(command[command.index("--model") + 1], "js/brains/ppo/model.json")
+        self.assertEqual(command[command.index("--device") + 1], "auto")
         self.assertIn("--no-push", command)
         self.assertIn("--no-pages", command)
         self.assertEqual(command[command.index("--target-rounds") + 1], "4")
+
+    def test_publish_command_forwards_cuda_flags(self):
+        command = train_all.publish_command(
+            "a2c",
+            target_rounds=4,
+            shared_args=[],
+            device="cuda",
+            require_cuda=True,
+            python="python",
+        )
+
+        self.assertEqual(command[command.index("--device") + 1], "cuda")
+        self.assertIn("--require-cuda", command)
+
+    def test_index_algorithms_includes_all_supported_when_training_subset(self):
+        self.assertEqual(
+            train_all.index_algorithms(["a2c"]),
+            ["dqn", "qrdqn", "ppo", "a2c", "maskable-ppo"],
+        )
 
     def test_assemble_brains_index_lists_only_existing_non_default(self):
         with tempfile.TemporaryDirectory() as tmp:

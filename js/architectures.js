@@ -7,11 +7,11 @@
  * dependencies -- runs as-is on GitHub Pages.
  *
  * Content is grounded in the deep-research briefs; each card cites primary
- * sources. The `status` field reflects what is wired into the training +
- * checkpoint pipeline today:
- *   live      - currently exported and playable in the demo above
- *   trainable - implemented in the unified pipeline; retrain to publish
- *   planned   - designed, not yet wired into the trainer
+ * sources. The `status` field reflects the current repo state:
+ *   live      - default exported artifact loaded on first page load
+ *   exported  - exported artifact is available in the brain selector
+ *   trainable - implemented in the trainer, but no artifact is checked in yet
+ *   planned   - designed, not yet wired into the trainer/export path
  */
 (function () {
   "use strict";
@@ -38,7 +38,7 @@
             "It is off-policy and sample-efficient thanks to a replay buffer that recycles past transitions, but it learns a deterministic policy via epsilon-greedy exploration, which can be brittle under the shifting opponents of self-play."
           ],
           ul: [
-            "Input: the 27-dim engineered feature vector (relative threat positions, cooldowns, counts).",
+            "Input: an 8x28x48 map grid plus 6 scalar flags/counts (10,758 inputs, featureEncoding=grid-v1).",
             "Network: MLP [64, 64] with ReLU; output = one Q-value per action.",
             "Replay buffer + target network stabilize the bootstrapped TD target."
           ]
@@ -47,7 +47,7 @@
           h: "Implementation",
           p: [
             "Trained headlessly in the same arcade loop the browser runs, against frozen snapshots of the opposing agent. The learned Q-network is a stack of dense layers, so export is trivial: serialize weights/biases to JSON and evaluate a matmul+ReLU forward pass in ~30 lines of JavaScript.",
-            "This is exactly what powers the playable demo above today (schema v14, legacy linear features; v15+ uses the wrap-aware features)."
+            "This is exactly what powers the playable demo above today (schema v17, wrap-aware grid features)."
           ],
           ul: [
             "Browser inference: zero dependencies, zero cold-start, iOS/Safari-safe.",
@@ -64,11 +64,11 @@
       id: "dqn-plus",
       name: "DQN + n-step / PER / Double",
       family: "Value-based (improved)",
-      status: "trainable",
+      status: "planned",
       accent: "#83ff8f",
       tagline: "Rainbow's load-bearing pieces, minus the export pain. All training-only — the deployed net is unchanged.",
       facts: [
-        { label: "Library", value: "Custom SB3 DQN variant" },
+        { label: "Library", value: "Planned custom SB3 DQN variant" },
         { label: "Action space", value: "Discrete" },
         { label: "Browser runtime", value: "Hand-rolled JS MLP" },
         { label: "Export", value: "Identical to DQN" }
@@ -89,8 +89,8 @@
         {
           h: "Implementation",
           p: [
-            "Implemented as a custom DQN subclass: a few lines in the target computation (n-step + Double), a prioritized buffer, and an optional dueling head. Because none of this changes the acting network's shape, the existing JSON export and hand-rolled JS forward pass keep working with no changes.",
-            "This is the lowest-risk upgrade path: better sample efficiency and stability for free at deploy time."
+            "Planned as a custom DQN subclass: a few lines in the target computation (n-step + Double), a prioritized buffer, and an optional dueling head. Because none of this has to change the acting network's shape, the existing JSON export and hand-rolled JS forward pass can keep working.",
+            "This is the lowest-risk upgrade path once wired: better sample efficiency and stability with no deploy-time runtime change."
           ]
         }
       ],
@@ -104,7 +104,7 @@
       id: "qr-dqn",
       name: "QR-DQN (Distributional)",
       family: "Value-based (distributional)",
-      status: "trainable",
+      status: "exported",
       accent: "#ffd166",
       tagline: "Learns the full distribution of returns, not just the mean. Best ready-made distributional method that still exports as an MLP.",
       facts: [
@@ -138,13 +138,13 @@
       id: "ppo",
       name: "Proximal Policy Optimization",
       family: "Policy-gradient / actor-critic",
-      status: "trainable",
+      status: "exported",
       accent: "#ff4fc3",
       tagline: "The strongest general self-play default. Learns a stochastic policy that handles a moving opponent better than DQN's greedy value chase.",
       facts: [
         { label: "Library", value: "stable-baselines3 (core)" },
         { label: "Action space", value: "Discrete" },
-        { label: "Browser runtime", value: "Hand-rolled JS / ORT-Web" },
+        { label: "Browser runtime", value: "Hand-rolled JS actor" },
         { label: "Export", value: "Actor MLP → logits" }
       ],
       sections: [
@@ -189,7 +189,7 @@
         {
           h: "Design",
           p: [
-            "A2C is the synchronous, deterministic form of actor-critic: it estimates an advantage and nudges a stochastic policy toward better-than-average actions. It shares PPO's on-policy footing — no replay buffer, so no stale experience from obsolete self-play opponents and no replay-pickle disk cost.",
+            "A2C is the synchronous A3C-style actor-critic: it estimates an advantage and nudges a stochastic policy toward better-than-average actions. It shares PPO's on-policy footing — no replay buffer, so no stale experience from obsolete self-play opponents and no replay-pickle disk cost.",
             "It omits PPO's clipped trust region, so it is simpler and faster per step but a touch less stable; a reasonable lightweight fallback when PPO's robustness is not required."
           ],
           ul: [
@@ -213,7 +213,7 @@
       id: "maskable-ppo",
       name: "MaskablePPO",
       family: "Policy-gradient (action-masked)",
-      status: "trainable",
+      status: "exported",
       accent: "#34f5ff",
       tagline: "PPO that knows which actions are legal. The best fit for this game — only butterfly/boss roles can fire.",
       facts: [
@@ -234,7 +234,7 @@
           h: "Implementation",
           p: [
             "Train with sb3-contrib MaskablePPO, supplying an action_masks() method from the env (per-role fire legality, drop cooldown, etc.). The actor stays a plain MLP — masking happens outside the network — so static export is unaffected. At browser inference, reproduce the same mask in JS (set illegal logits to −1e9) before the argmax.",
-            "The manifest carries a per-state mask spec so the JS runtime can rebuild it deterministically."
+            "The manifest records that action masking is required; the JS runtime rebuilds the same legal-action mask from the browser game rules before choosing an action."
           ]
         }
       ],
@@ -247,11 +247,11 @@
       id: "neuro-es",
       name: "Evolution Strategies / NEAT",
       family: "Neuroevolution",
-      status: "trainable",
+      status: "planned",
       accent: "#83ff8f",
       tagline: "Gradient-free. Evolve a population of policies by match outcome — and export the winning weights straight to the browser.",
       facts: [
-        { label: "Library", value: "ES / NEAT (custom · neataptic)" },
+        { label: "Library", value: "Planned ES / NEAT path" },
         { label: "Action space", value: "Discrete" },
         { label: "Browser runtime", value: "Hand-rolled JS / neataptic" },
         { label: "Export", value: "Plain weight arrays" }
@@ -272,7 +272,7 @@
         {
           h: "Implementation",
           p: [
-            "Run ES/NEAT over the headless arcade env, evaluating each candidate against a pool of frozen opponents. The champion's weights export to the same JSON the hand-rolled JS evaluator already consumes — so an evolved policy plugs into the demo with zero runtime changes.",
+            "Would run ES/NEAT over the headless arcade env, evaluating each candidate against a pool of frozen opponents. The champion's weights could export to the same JSON the hand-rolled JS evaluator already consumes — so an evolved fixed-MLP policy would plug into the demo with minimal runtime change.",
             "Best reached for if gradient self-play stalls, or when you want population diversity and trivial export in one package."
           ]
         }
@@ -335,7 +335,7 @@
         "No notion of action legality — can waste capacity on illegal moves."
       ],
       caveats: [
-        "Schema v14 used legacy linear features; v15+ uses the wrap-aware grid.",
+        "The current schema uses wrap-aware grid features; older schema v14 artifacts used legacy linear features.",
         "The browser must reproduce the trainer's observation exactly (see js/encoder.js)."
       ]
     },
@@ -352,7 +352,7 @@
       ],
       caveats: [
         "All gains are training-only; the deployed net is identical to DQN.",
-        "Needs a retrain to publish — no new artifact exists yet."
+        "Planned trainer/export work; no artifact exists yet."
       ]
     },
     "qr-dqn": {
@@ -368,7 +368,7 @@
       ],
       caveats: [
         "The manifest must record the quantile count so JS folds the output right.",
-        "Not yet wired into the export — train to enable."
+        "Exported artifact exists under js/brains/qr-dqn; retrain when you want it refreshed to the latest schema and opponent pool."
       ]
     },
     ppo: {
@@ -384,12 +384,12 @@
       ],
       caveats: [
         "Observation preprocessing is NOT bundled in the export — mirror it in JS.",
-        "No PPO artifact published yet."
+        "Exported artifact exists under js/brains/ppo; the browser evaluates actor logits directly in JS."
       ]
     },
     a2c: {
       pros: [
-        "Simpler and faster per step than PPO; deterministic and reproducible.",
+        "Simpler and faster per step than PPO; reproducible under fixed seeds.",
         "On-policy — no replay buffer, so no stale experience and no replay-pickle disk cost.",
         "Identical plain-MLP actor export to PPO; browser runtime unchanged."
       ],
@@ -416,7 +416,7 @@
       ],
       caveats: [
         "Mask logic must match between trainer and browser or behaviour diverges.",
-        "Manifest carries the per-state mask spec; not yet exported."
+        "Exported artifact exists under js/brains/maskable-ppo; manifest actionMasking tells JS to rebuild masks from game rules."
       ]
     },
     "neuro-es": {
@@ -432,7 +432,7 @@
       ],
       caveats: [
         "Use a historical-opponent archive to avoid cycling, same as gradient self-play.",
-        "Best reserved for when gradient self-play stalls; no artifact yet."
+        "Planned only; no ES/NEAT trainer or artifact is wired in yet."
       ]
     },
     "deepset-attn": {
@@ -468,6 +468,7 @@
 
   var STATUS_LABELS = {
     live: "Live in demo",
+    exported: "Exported",
     trainable: "Trainable now",
     planned: "Planned"
   };
