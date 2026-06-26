@@ -19,17 +19,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from tools import rl_algorithms  # noqa: E402  (dependency-free registry)
+from tools.static_publish import copy_static_pages_files  # noqa: E402
 
 EXPECTED_MODEL_SCHEMA_VERSION = 17
 DEFAULT_CHECKPOINT_DIR = Path(".training-checkpoints/galagai-balanced-v17")
 DEFAULT_MODEL = Path("js/galagai-model.json")
-STATIC_PAGE_PATHS = [
-    Path("index.html"),
-    Path("style.css"),
-    Path("js"),
-    Path("alien_invasion/DQN.py"),
-    Path("alien_invasion/images"),
-]
 
 
 def run(command: Sequence[str], *, cwd: Path = ROOT, capture: bool = False) -> str:
@@ -479,21 +473,6 @@ def commit_master(summary: dict[str, object], *, model_path: Path, no_push: bool
     if not no_push:
         run(["git", "push", "origin", "master"])
     return True
-
-
-def copy_static_pages_files(worktree: Path) -> None:
-    for relative_path in STATIC_PAGE_PATHS:
-        source = ROOT / relative_path
-        if not source.exists():
-            continue
-        destination = worktree / relative_path
-        if source.is_dir():
-            if destination.exists():
-                shutil.rmtree(destination)
-            shutil.copytree(source, destination)
-        else:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
 
 
 def publish_pages(summary: dict[str, object], *, no_push: bool) -> bool:

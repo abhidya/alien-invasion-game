@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools import rl_algorithms
+from tools.static_publish import copy_static_pages_files
 
 # Model-artifact schema version. Must match train_static_pilot.MODEL_SCHEMA_VERSION
 # (kept as a local constant so this orchestrator stays torch-free at import, the
@@ -139,10 +140,6 @@ def assemble_brains_index(main_manifest_path: Path, algorithms: list[str]) -> di
     return brains
 
 
-# Static files mirrored to gh-pages (matches tools/train_publish.py).
-STATIC_PAGE_PATHS = ["index.html", "style.css", "js", "game_spec.json", "alien_invasion/DQN.py", "alien_invasion/images"]
-
-
 def _git(args: list[str], *, cwd: Path = ROOT, check: bool = True) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=check)
 
@@ -163,15 +160,7 @@ def deploy_artifacts(techniques: list[str]) -> None:
     worktree = Path(tempfile.mkdtemp(prefix="galagai-ghpages."))
     try:
         _git(["worktree", "add", str(worktree), "origin/gh-pages"])
-        for relative in STATIC_PAGE_PATHS:
-            source = ROOT / relative
-            destination = worktree / relative
-            if not source.exists():
-                continue
-            if destination.exists():
-                shutil.rmtree(destination) if destination.is_dir() else destination.unlink()
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source, destination) if source.is_dir() else shutil.copy2(source, destination)
+        copy_static_pages_files(worktree)
         _git(["add", "-A"], cwd=worktree)
         _git(["commit", "-m", f"Publish v{SCHEMA_VERSION} grid demo (brains + per-side selector)"], cwd=worktree, check=False)
         for attempt in range(4):
