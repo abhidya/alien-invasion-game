@@ -1366,9 +1366,29 @@ def selected_spec() -> "rl_algorithms.AlgorithmSpec":
     return rl_algorithms.get_algorithm(selected_algorithm_key())
 
 
+def resolve_device(
+    requested: str,
+    spec: "rl_algorithms.AlgorithmSpec",
+    *,
+    require_cuda: bool = False,
+) -> str:
+    """Choose a practical SB3 device for the selected algorithm."""
+    device = (requested or "auto").strip()
+    if device.lower() == "auto":
+        if not spec.off_policy and not require_cuda:
+            return "cpu"
+        return "auto"
+    return device or "auto"
+
+
 def selected_device() -> str:
     """SB3 device selector inherited by spawned training workers."""
-    return os.environ.get("GALAGAI_TORCH_DEVICE", "auto")
+    return resolve_device(
+        os.environ.get("GALAGAI_TORCH_DEVICE", "auto"),
+        selected_spec(),
+        require_cuda=os.environ.get("GALAGAI_REQUIRE_CUDA") == "1",
+    )
+
 
 
 def _import_agent_class(spec: "rl_algorithms.AlgorithmSpec"):
@@ -2774,7 +2794,10 @@ def main() -> None:
     parser.add_argument(
         "--device",
         default=selected_device(),
-        help="Torch/SB3 device selector: auto, cpu, cuda, cuda:0, etc. Use cuda with --require-cuda for GPU training.",
+        help=(
+            "Torch/SB3 device selector: auto, cpu, cuda, cuda:0, etc. "
+            "For on-policy MLP agents, auto resolves to cpu unless --require-cuda is set."
+        ),
     )
     parser.add_argument(
         "--require-cuda",
@@ -2782,10 +2805,13 @@ def main() -> None:
         help="Fail before training if torch cannot see a CUDA GPU.",
     )
     args = parser.parse_args()
+    spec = rl_algorithms.get_algorithm(args.algorithm)
+    resolved_device = resolve_device(args.device, spec, require_cuda=args.require_cuda)
     # Propagate via env so spawned candidate workers (ProcessPoolExecutor) inherit them.
     os.environ["GALAGAI_REPLAY_BUFFER_SIZE"] = str(max(1_000, int(args.replay_buffer_size)))
     os.environ["GALAGAI_ALGORITHM"] = args.algorithm
-    os.environ["GALAGAI_TORCH_DEVICE"] = args.device
+    os.environ["GALAGAI_TORCH_DEVICE"] = resolved_device
+    os.environ["GALAGAI_REQUIRE_CUDA"] = "1" if args.require_cuda else "0"
     if args.require_cuda and not torch.cuda.is_available():
         raise RuntimeError(
             "CUDA was required but torch.cuda.is_available() is false. "
@@ -2827,7 +2853,7 @@ def main() -> None:
         json.dumps(
             {
                 "model": str(args.out),
-                "algorithm": "stable-baselines3-dqn",
+                "algorithm": selected_spec().manifest_algorithm,
                 "cycles": self_play["cycles"],
                 "generationsPerSide": self_play["generationsPerSide"],
                 "balancedRounds": self_play["balancedRounds"],

@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -218,7 +219,14 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Bootstrap enemy generations for fresh artifacts so the first export is publishable.",
     )
-    parser.add_argument("--device", default="auto", help="Torch/SB3 device forwarded to training: auto, cpu, cuda, cuda:0, etc.")
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help=(
+            "Torch/SB3 device forwarded to training: auto, cpu, cuda, cuda:0, etc. "
+            "For on-policy MLP agents, auto resolves to cpu unless --require-cuda is set."
+        ),
+    )
     parser.add_argument("--require-cuda", action="store_true", help="Fail training if torch cannot see a CUDA GPU.")
     # Speed knobs forwarded to train_publish -> trainer (lower = faster matrix).
     parser.add_argument("--phase-timesteps", type=int, default=None)

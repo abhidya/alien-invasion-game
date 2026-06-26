@@ -554,7 +554,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device",
         default=os.environ.get("GALAGAI_TORCH_DEVICE", "auto"),
-        help="Torch/SB3 device selector forwarded to the trainer: auto, cpu, cuda, cuda:0, etc.",
+        help=(
+            "Torch/SB3 device selector forwarded to the trainer: auto, cpu, cuda, cuda:0, etc. "
+            "For on-policy MLP agents, auto resolves to cpu unless --require-cuda is set."
+        ),
     )
     parser.add_argument(
         "--require-cuda",
